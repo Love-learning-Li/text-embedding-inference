@@ -36,6 +36,7 @@ use tokenizers::processors::sequence::Sequence;
 use tokenizers::processors::template::TemplateProcessing;
 use tokenizers::{PostProcessorWrapper, Tokenizer};
 use tracing::Span;
+use std::env;
 
 pub use logging::init_logging;
 
@@ -110,24 +111,42 @@ pub async fn run(
     let backend_model_type = get_backend_model_type(&config, &model_root, pooling)?;
 
     // Info model type
+    let is_rerank = std::env::var("IS_RERANK").unwrap_or_default() == "1";
     let model_type = match &backend_model_type {
+        text_embeddings_backend::ModelType::Classifier if is_rerank => {
+            // 如果环境变量标志为 RERANK，直接走 reranker 分支，不依赖 config.json 字段
+            let mut id2label = std::collections::HashMap::new();
+            id2label.insert("0".to_string(), "LABEL_0".to_string());
+
+            let mut label2id = std::collections::HashMap::new();
+            label2id.insert("LABEL_0".to_string(), 0);
+
+            let classifier_model = ClassifierModel { id2label, label2id };
+            ModelType::Reranker(classifier_model)
+        }
+
         text_embeddings_backend::ModelType::Classifier => {
+            // 原始 classifier 分支，检查字段是否存在
             let id2label = config
                 .id2label
                 .context("`config.json` does not contain `id2label`")?;
+            let label2id = config
+                .label2id
+                .context("`config.json` does not contain `label2id`")?;
+
             let n_classes = id2label.len();
             let classifier_model = ClassifierModel {
                 id2label,
-                label2id: config
-                    .label2id
-                    .context("`config.json` does not contain `label2id`")?,
+                label2id,
             };
+
             if n_classes > 1 {
                 ModelType::Classifier(classifier_model)
             } else {
                 ModelType::Reranker(classifier_model)
             }
         }
+
         text_embeddings_backend::ModelType::Embedding(pool) => {
             ModelType::Embedding(EmbeddingModel {
                 pooling: pool.to_string(),
@@ -279,11 +298,14 @@ pub async fn run(
         .await
         .context("Model backend is not healthy")?;
 
-    tracing::info!("Warming up model");
-    backend
-        .warmup(max_input_length, max_batch_tokens, max_batch_requests)
-        .await
-        .context("Model backend is not healthy")?;
+    if !backend.padded_model {
+        tracing::info!("Warming up model");
+        let max_batch_requests = Some(3);
+        backend
+            .warmup(4, 4, max_batch_requests)
+            .await
+            .context("Model backend is not healthy")?;
+    }
 
     let max_batch_requests = backend
         .max_batch_size
@@ -392,11 +414,11 @@ fn get_backend_model_type(
             continue;
         }
 
-        if Some(text_embeddings_backend::Pool::Splade) == pooling && arch.ends_with("MaskedLM") {
+        if Some(text_embeddings_backend::Pool::Splade) == pooling && (arch.ends_with("MaskedLM") || arch.ends_with("RobertaModel")) {
             return Ok(text_embeddings_backend::ModelType::Embedding(
                 text_embeddings_backend::Pool::Splade,
             ));
-        } else if arch.ends_with("Classification") {
+        } else if arch.ends_with("Classification") || env::var("IS_RERANK").is_ok() {
             if pooling.is_some() {
                 tracing::warn!(
                     "`--pooling` arg is set but model is a classifier. Ignoring `--pooling` arg."

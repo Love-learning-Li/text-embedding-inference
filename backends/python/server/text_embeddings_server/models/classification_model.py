@@ -70,3 +70,4 @@ class ClassificationModel(Model):
         output = self.model(**kwargs, return_dict=True)
         all_scores = output.logits.tolist()
         return [Score(values=scores) for scores in all_scores]
+

@@ -11,30 +11,30 @@ from text_embeddings_server.models.model import Model
 from text_embeddings_server.models.masked_model import MaskedLanguageModel
 from text_embeddings_server.models.default_model import DefaultModel
 from text_embeddings_server.models.classification_model import ClassificationModel
-from text_embeddings_server.models.jinaBert_model import FlashJinaBert
-from text_embeddings_server.models.flash_mistral import FlashMistral
-from text_embeddings_server.models.flash_qwen3 import FlashQwen3
+# from text_embeddings_server.models.qwen3_rerank_model import Qwen3RerankModel
+# from text_embeddings_server.models.unixcoder_model import UniXcoderModel
+from text_embeddings_server.models.flash_qwen3 import FlashQwen3, FlashQwen3Model
+
 from text_embeddings_server.utils.device import get_device, use_ipex
 
 __all__ = ["Model"]
 
 TRUST_REMOTE_CODE = os.getenv("TRUST_REMOTE_CODE", "false").lower() in ["true", "1"]
-DISABLE_TENSOR_CACHE = os.getenv("DISABLE_TENSOR_CACHE", "false").lower() in [
-    "true",
-    "1",
-]
 # Disable gradients
 torch.set_grad_enabled(False)
 
 FLASH_ATTENTION = True
 try:
     from text_embeddings_server.models.flash_bert import FlashBert
+    from text_embeddings_server.models.flash_roberta import FlashRoberta
 except ImportError as e:
     logger.warning(f"Could not import Flash Attention enabled models: {e}")
     FLASH_ATTENTION = False
 
 if FLASH_ATTENTION:
     __all__.append(FlashBert)
+    __all__.append(FlashRoberta)
+    __all__.append(FlashQwen3)
 
 
 def wrap_model_if_hpu(model_handle, device):
@@ -70,8 +70,16 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
     else:
         raise RuntimeError(f"Unknown dtype {dtype}")
 
+
+    enable_boost = os.getenv("ENABLE_BOOST", "True")
+    if enable_boost not in("True", "False"):
+        raise ValueError("env ENABLE_BOOST value must be True or False")
+    
+    if enable_boost == "True":
+        dtype == torch.float16
+        
     device = get_device()
-    logger.info(f"backend device: {device}")
+    logger.info(f"__init__.py -> get device -> backend device: {device} {device.type}")
 
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=TRUST_REMOTE_CODE)
 
@@ -89,7 +97,7 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
         config: BertConfig
         if (
             use_ipex()
-            or device.type in ["cuda", "hpu"]
+            or device.type in ["cuda", "hpu", "npu"]
             and config.position_embedding_type == "absolute"
             and datatype in [torch.float16, torch.bfloat16]
             and FLASH_ATTENTION
@@ -102,6 +110,7 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
                 return create_model(DefaultModel, model_path, device, datatype, pool)
 
             try:
+                logger.info(f"----------------------- use flash bert")
                 return create_model(FlashBert, model_path, device, datatype)
             except FileNotFoundError:
                 logger.info(
@@ -110,9 +119,14 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
                 return create_model(DefaultModel, model_path, device, datatype, pool)
 
         if config.architectures[0].endswith("Classification"):
-            return create_model(ClassificationModel, model_path, device, datatype)
+            logger.info(f"----------------------- use flash robert")
+            return create_model(RobertaForSequenceClassification, model_path, device, datatype)
+        elif os.getenv("IS_RERANK", None):
+            return create_model(Qwen3RerankModel, model_path, device, datatype)
         elif config.architectures[0].endswith("ForMaskedLM") and pool == "splade":
             return create_model(MaskedLanguageModel, model_path, device, datatype)
+        elif str(model_path).endswith("unixcoder-base"):
+            return create_model(UniXcoderModel, model_path, device, datatype)
         else:
             return create_model(DefaultModel, model_path, device, datatype, pool)
 
@@ -127,10 +141,24 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
             return create_model(FlashQwen3, model_path, device, datatype, pool)
         except FileNotFoundError:
             return create_model(DefaultModel, model_path, device, datatype, pool)
+    
+    if config.model_type == "qwen3" and device.type == "npu":
+        try:
+            logger.info(f"----------------------- use npu in my modified flash qwen3 model")
+            return create_model(FlashQwen3, model_path, device, datatype, pool)
+        except FileNotFoundError as e:
+            logger.warning(f"FlashQwen3 failed with FileNotFoundError: {e}")  # 添加详细错误信息
+            logger.info(f"----------------------- use npu in default flash qwen3 model")
+            return create_model(DefaultModel, model_path, device, datatype, pool)
+        except Exception as e:
+            logger.error(f"FlashQwen3 failed with unexpected error: {type(e).__name__}: {e}")  # 捕获其他异常
+            raise
 
     # Default case
     if config.architectures[0].endswith("Classification"):
-        return create_model(ClassificationModel, model_path, device, datatype)
+        logger.info(f"----------------------- use flash robert")
+        return create_model(FlashRoberta, model_path, device, datatype)
+        # return create_model(ClassificationModel, model_path, device, datatype)
     elif config.architectures[0].endswith("ForMaskedLM") and pool == "splade":
         return create_model(MaskedLanguageModel, model_path, device, datatype)
     else:

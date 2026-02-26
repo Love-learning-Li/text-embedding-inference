@@ -8,12 +8,33 @@ from transformers.activations import ACT2FN
 from transformers.models.bert import BertConfig
 from opentelemetry import trace
 from text_embeddings_server.models import Model
-from text_embeddings_server.models.types import FlashBatch, Embedding, PaddedBatch
+from text_embeddings_server.models.types import FlashBatch, PaddedBatch, Embedding
 from text_embeddings_server.utils.flash_attn import attention
 from text_embeddings_server.utils.device import use_ipex
 
 tracer = trace.get_tracer(__name__)
 
+TOKEN_TYPE_SHIFT = 30
+
+def encode_token_type_ids(
+    input_ids: torch.Tensor, token_type_ids: torch.Tensor
+) -> None:
+    # input_ids can be padded to the right
+    input_ids[: token_type_ids.shape[0]].bitwise_or_(token_type_ids << TOKEN_TYPE_SHIFT)
+
+
+def decode_token_type_ids(input_ids: torch.Tensor) -> torch.Tensor:
+    ids_mask = (
+        torch.ones_like(input_ids, dtype=torch.int32, device=input_ids.device)
+        << TOKEN_TYPE_SHIFT
+    )
+    tokens_mask = ids_mask.bitwise_not()
+
+    token_type_ids = input_ids.bitwise_and(ids_mask) >> TOKEN_TYPE_SHIFT
+
+    input_ids.bitwise_and_(tokens_mask)
+
+    return token_type_ids
 
 def hpu_add_layer_norm(
     add: torch.Tensor,
@@ -40,7 +61,10 @@ class FastLayerNorm:
         self.variance_epsilon = config.layer_norm_eps
         self.device = device
         self.use_ipex = use_ipex()
-
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.LayerNorm.weight = nn.Parameter(self.weight)
+        self.LayerNorm.bias = nn.Parameter(self.bias)
+        
     def forward(self, hidden_states, residual=None):
         # Flash attention imports
         normed_hidden_states = None
@@ -89,6 +113,13 @@ class FastLayerNorm:
                 self.variance_epsilon,
                 residual is not None,
             )
+            res = residual if residual is not None else hidden_states
+        elif self.device.type == "npu":
+            if residual is not None:     
+                normed_hidden_states = self.LayerNorm(hidden_states + residual)
+            else:
+                normed_hidden_states = self.LayerNorm(hidden_states)
+                
             res = residual if residual is not None else hidden_states
         return normed_hidden_states, res
 
@@ -187,6 +218,7 @@ class BertAttention:
             q,
             k,
             v,
+            self.num_heads,
             attn_output,
             cu_seqlens,
             max_s,
@@ -364,3 +396,7 @@ class FlashBert(Model):
             )
             for i in range(len(batch))
         ]
+
+
+if __name__ == "__main__":
+    model = FlashBert("/home/data/bge-reranker-large")

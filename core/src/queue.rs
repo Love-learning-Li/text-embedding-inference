@@ -153,6 +153,7 @@ fn queue_blocking_task(
                     };
 
                     if total_tokens > max_batch_tokens {
+                        tracing::info!("split new batch because cur up to max_batch_tokens:{max_batch_tokens:?}");
                         entries.push_front(entry);
                         break;
                     }
@@ -174,7 +175,8 @@ fn queue_blocking_task(
 
                     entry_index += 1;
 
-                    if Some(metadata.len()) == max_batch_requests {
+                    if Some(metadata.len()) == Some(capacity) {
+                        tracing::info!("split new batch because cur up to:{capacity:?}");
                         break;
                     }
                 }
@@ -183,6 +185,7 @@ fn queue_blocking_task(
                 let next_batch = if metadata.is_empty() {
                     None
                 } else {
+                    tracing::info!("inference batch size is:{batch_size:?}");
                     Some((
                         metadata,
                         Batch {
