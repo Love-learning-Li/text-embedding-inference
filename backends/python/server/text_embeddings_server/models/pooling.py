@@ -56,7 +56,7 @@ class LastTokenPooling(_Pooling):
     @tracer.start_as_current_span("pooling")
     def forward(self, model_output, attention_mask) -> Tensor:
         token_embeddings = model_output[0]
-        attention_mask = attention_mask.to(dtype=torch.long)
+        attention_mask = attention_mask.to(dtype=torch.bool)
         
         batch_size = token_embeddings.shape[0]
         seq_length = token_embeddings.shape[1]

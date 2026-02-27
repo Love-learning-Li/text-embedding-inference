@@ -202,7 +202,7 @@ def attention(
                 0,
                 softmax_scale,
                 zero_tensors=False,
-                is_causal=False,
+                is_causal=is_causal,
                 return_softmax=False,
                 gen_=None,
                 )

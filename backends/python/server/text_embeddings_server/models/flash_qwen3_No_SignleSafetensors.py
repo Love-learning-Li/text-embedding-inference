@@ -33,18 +33,6 @@ def load_weight(model_path, weight_map, name, dtype, device):
         with safe_open(f"{model_path}/{target_file}", framework="pt") as f:
             return f.get_tensor(name).to(dtype).to(device)
 
-def _generate_attn_mask(max_seq_len, dtype):
-    # Construct lower triangle matrix.
-    mask_flag = torch.ones((max_seq_len, max_seq_len),
-                           dtype=torch.bool).tril_()
-    # Create upper triangle matrix used to mark mask positions.
-    mask_flag = ~mask_flag
-    # Currently for fp16 dtype, the mask value should be set to -inf.
-    # TODO: Eliminate this part in the future.
-    mask_value = float('-inf') if dtype == torch.float16 else 1
-    attn_mask = torch.zeros(size=(max_seq_len, max_seq_len), dtype=dtype) \
-        .masked_fill_(mask_flag, mask_value)
-    return attn_mask
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
@@ -197,13 +185,13 @@ class Qwen3Attention:
             F.linear(hidden_states, self.k_proj_weight).view(hidden_shape_kv)
         )
         v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape_kv)
+        cos, sin = position_embeddings
+        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
         
         if self.num_key_value_groups > 1:
             k = k.repeat_interleave(self.num_key_value_groups, dim=1)
             v = v.repeat_interleave(self.num_key_value_groups, dim=1)
         
-        cos, sin = position_embeddings
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
         attn_output = torch.empty_like(q)
         attention(
             q,
@@ -325,10 +313,6 @@ class Qwen3RotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, x, position_ids):
-        # 在方法开头添加维度检查和调整
-        if position_ids.dim() == 1:
-            position_ids = position_ids.unsqueeze(0)
-
         inv_freq_expanded = (
             self.inv_freq[None, :, None]
             .float()
@@ -361,11 +345,10 @@ class FlashQwen3Model:
         config: MistralConfig
     """
 
-    def __init__(self, model_path, weight_map, device, dtype, config: Qwen3Config):
-        # 使用 weight_map（可能是 None）
+    def __init__(self, model_path, weight_map_json, device, dtype, config: Qwen3Config):
         self.word_embeddings_weight = load_weight(
             model_path,
-            weight_map,  # 直接传递 weight_map，None 表示单文件
+            weight_map_json["weight_map"],
             "embed_tokens.weight",
             dtype,
             device,
@@ -373,7 +356,7 @@ class FlashQwen3Model:
         self.layers = [
             Qwen3DecoderLayer(
                 model_path,
-                weight_map,  # 同样传递 weight_map
+                weight_map_json["weight_map"],
                 device,
                 dtype,
                 config,
@@ -384,7 +367,7 @@ class FlashQwen3Model:
         self.rotary_emb = Qwen3RotaryEmbedding(config=config, device=device)
         self.norm = Qwen3RMSNorm(
             model_path,
-            weight_map,  # 这里也要改成 weight_map
+            weight_map_json["weight_map"],
             f"norm.weight",
             device,
             dtype,
@@ -408,7 +391,6 @@ class FlashQwen3Model:
                 hidden_states, position_embeddings, cu_seqlens, max_s, attn_mask
             )
         hidden_states = self.norm.forward(hidden_states)
-        
         return BaseModelOutputWithPast(last_hidden_state=hidden_states)
 
 
@@ -428,6 +410,9 @@ class FlashQwen3(Model):
         else:
             self.max_input_length = config.max_position_embeddings
 
+        with open(model_path / "model.safetensors.index.json", "r") as f:
+            index_data = json.load(f)
+
         # 检测是单文件还是分片模型
         index_file = model_path / "model.safetensors.index.json"
         if index_file.exists():
@@ -438,10 +423,11 @@ class FlashQwen3(Model):
             weight_map = index_data["weight_map"]
         else:
             # 单文件模型
-            logger.info(f"----------------------- FlshQwen3 load 单文件模型")
+            logger.info(f"----------------------- FlshQwen3load 单文件模型")
+            index_data = None
             weight_map = None
 
-        model = FlashQwen3Model(model_path, weight_map, device, dtype, config)
+        model = FlashQwen3Model(model_path, index_data, device, dtype, config)
         self.hidden_size = config.hidden_size
         self.pooling = DefaultPooling(self.hidden_size, pooling_mode=pool)
         self.device = device
@@ -463,64 +449,42 @@ class FlashQwen3(Model):
                 (input_lens.new_tensor([0]), input_lens.cumsum(-1).int())
             )
             mask = batch.attention_mask.bool()
+            logger.info(f"----------------------- mask = batch.attention_mask.bool():{mask}")
             bsz, tgt_len = mask.size()
-            attn_mask = _generate_attn_mask(tgt_len, self.dtype).unsqueeze(0).unsqueeze(0)
-            pooling_attention_mask = batch.attention_mask
-            
-            output = self.model.forward(
-                input_ids=batch.input_ids,
-                position_ids=batch.position_ids,
-                cu_seqlens=cu_seqlens,
-                max_s=max_input_lens,
-                mask=mask,
-                attn_mask=attn_mask,
+            min_val = torch.finfo(self.dtype).min
+            attn_mask = torch.full(
+                [bsz, 1, tgt_len, tgt_len],
+                fill_value=min_val,
+                device=self.device,
+                dtype=self.dtype,
             )
-            
-            hidden_states = output.last_hidden_state
-            if hidden_states.dim() == 2:
-                hidden_states = hidden_states.unsqueeze(1)
-            output = BaseModelOutputWithPast(last_hidden_state=hidden_states)
-            
+            logger.info(f"----------------------- attn_mask = torch.full:{attn_mask}")
+            expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, tgt_len)
+            logger.info(f"----------------------- expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, tgt_len):{expanded_mask}")
+            attn_mask = attn_mask.masked_fill(expanded_mask, 0.0)
+            logger.info(f"----------------------- attn_mask = attn_mask.masked_fill(expanded_mask, 0.0):{attn_mask}")
         elif isinstance(batch, FlashBatch):
             cu_seqlens = batch.cu_seqlens
             mask = None
             attn_mask = None
             max_input_lens = batch.max_s
-            
-            seq_lens = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
-            
-            output = self.model.forward(
-                input_ids=batch.input_ids,
-                position_ids=batch.position_ids,
-                cu_seqlens=cu_seqlens,
-                max_s=max_input_lens,
-                mask=mask,
-                attn_mask=attn_mask,
-            )
-            
-            hidden_states = output.last_hidden_state
-            
-            batch_hidden_states = torch.zeros(
-                (batch.size, batch.max_s, self.hidden_size),
-                dtype=hidden_states.dtype,
-                device=hidden_states.device
-            )
-            
-            pooling_attention_mask = torch.zeros(
-                (batch.size, batch.max_s),
-                dtype=torch.long,
-                device=self.device
-            )
-            
-            offset = 0
-            for i, seq_len in enumerate(seq_lens):
-                batch_hidden_states[i, :seq_len, :] = hidden_states[offset:offset + seq_len, :]
-                pooling_attention_mask[i, :seq_len] = 1
-                offset += seq_len
-            
-            output = BaseModelOutputWithPast(last_hidden_state=batch_hidden_states)
 
-        embedding = self.pooling.forward(output, pooling_attention_mask)
+        logger.info(f"----------------------- input_ids: {batch.input_ids}, shape: {batch.input_ids.shape}")
+        logger.info(f"----------------------- position_ids: {batch.position_ids}, shape: {batch.position_ids.shape}")
+        logger.info(f"----------------------- cu_seqlens: {cu_seqlens}")
+        logger.info(f"----------------------- max_input_lens: {max_input_lens}")
+        logger.info(f"----------------------- mask: {mask}")
+        logger.info(f"----------------------- attn_mask: {attn_mask}")
+        output = self.model.forward(
+            input_ids=batch.input_ids,
+            position_ids=batch.position_ids,
+            cu_seqlens=cu_seqlens,
+            max_s=max_input_lens,
+            mask=mask,
+            attn_mask=attn_mask,
+        )
+        embedding = self.pooling.forward(output, batch.attention_mask)
+        logger.info(f"----------------------- embedding: {embedding}")
         cpu_results = embedding.view(-1).tolist()
 
         return [

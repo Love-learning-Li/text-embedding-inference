@@ -221,27 +221,23 @@ class Qwen3Attention:
         q_proj_out = F.linear(hidden_states, self.q_proj_weight)
         log_tensor_stats("Attention.q_proj_output", q_proj_out, "FlashQwen3.Attention")
         
-        # q = self.q_norm.forward(q_proj_out.view(hidden_shape_q))
-        q = self.q_norm.forward(q_proj_out.view(hidden_shape_q)).transpose(1, 2)  # [1, 16, 8, 128]
+        q = self.q_norm.forward(q_proj_out.view(hidden_shape_q))
         log_tensor_stats("Attention.q_after_q_norm", q, "FlashQwen3.Attention")
         
         k_proj_out = F.linear(hidden_states, self.k_proj_weight)
         log_tensor_stats("Attention.k_proj_output", k_proj_out, "FlashQwen3.Attention")
         
-        # k = self.k_norm.forward(k_proj_out.view(hidden_shape_kv))
-        k = self.k_norm.forward(k_proj_out.view(hidden_shape_kv)).transpose(1, 2)  # [1, 8, 8, 128]
+        k = self.k_norm.forward(k_proj_out.view(hidden_shape_kv))
         log_tensor_stats("Attention.k_after_k_norm", k, "FlashQwen3.Attention")
         
-        # v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape_kv)
-        v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape_kv).transpose(1, 2)
+        v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape_kv)
         log_tensor_stats("Attention.v_proj_output", v, "FlashQwen3.Attention")
         
         cos, sin = position_embeddings
         log_tensor_stats("Attention.rope_cos", cos, "FlashQwen3.Attention")
         log_tensor_stats("Attention.rope_sin", sin, "FlashQwen3.Attention")
         
-        # q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
         log_tensor_stats("Attention.q_after_rope", q, "FlashQwen3.Attention")
         log_tensor_stats("Attention.k_after_rope", k, "FlashQwen3.Attention")
         
@@ -264,10 +260,9 @@ class Qwen3Attention:
             is_causal=True,
             attn_mask=attn_mask,
         )
-        # log_tensor_stats("Attention.attn_output_before_o_proj", attn_output, "FlashQwen3.Attention")
+        log_tensor_stats("Attention.attn_output_before_o_proj", attn_output, "FlashQwen3.Attention")
         
-        # attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = F.linear(attn_output, self.o_proj_weight, bias=None)
         log_tensor_stats("Attention.attn_output_final", attn_output, "FlashQwen3.Attention")
         log_separator(f"Qwen3Attention Layer End")
