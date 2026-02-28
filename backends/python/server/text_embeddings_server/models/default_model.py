@@ -118,8 +118,29 @@ class DefaultModel(Model):
             with torch.no_grad():
                 output = self.model(**kwargs, is_causal=False)
         else:
-            with torch.no_grad():
-                output = self.model(**kwargs)
+            experimental_config = torch_npu.profiler._ExperimentalConfig(profiler_level=torch_npu.profiler.ProfilerLevel.Level2)
+            with torch_npu.profiler.profile(
+                    with_stack=False,  # 采集torch 算子的函数调用栈的开关，该参数选填，默认关闭
+                    record_shapes=False,  # 采集torch 算子的input shape和input type的开关，该参数选填，默认关闭
+                    profile_memory=False,  # 采集memory相关数据的开关，该参数选填，默认关闭
+                    schedule=torch_npu.profiler.schedule(wait=0, active=1),  # warmup默认为0，老版本torch_npu包该参数为必填项
+                    experimental_config=experimental_config,  # 该参数选填，默认为Level0
+                    on_trace_ready=torch_npu.profiler.tensorboard_trace_handler("/tmp/profiling")
+                    # 导出tensorboard可呈现的数据形式，可指定worker_name，默认为：{host名称}_{进程id}
+            ) as prof:
+                with torch.no_grad():
+                    # output = self.model(**kwargs)
+                    output = self.model.forward(
+                    input_ids=batch.input_ids,
+                    position_ids=batch.position_ids,
+                    cu_seqlens=cu_seqlens,
+                    max_s=max_input_lens,
+                    mask=mask,
+                    attn_mask=attn_mask,
+                    )
+                prof.step()
+            # with torch.no_grad():
+            #     output = self.model(**kwargs)
             
         embedding = self.pooling.forward(output, batch.attention_mask)
         cpu_results = embedding.view(-1).tolist()

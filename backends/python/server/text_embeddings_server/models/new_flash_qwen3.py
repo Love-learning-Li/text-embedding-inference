@@ -1,4 +1,5 @@
 import torch
+import torch_npu
 import json
 from pathlib import Path
 from torch import nn
@@ -140,12 +141,13 @@ class Qwen3RMSNorm:
             return hidden_states
         else:
             input_dtype = hidden_states.dtype
-            hidden_states = hidden_states.to(torch.float32)
-            variance = hidden_states.pow(2).mean(-1, keepdim=True)
-            hidden_states = hidden_states * torch.rsqrt(
-                variance + self.variance_epsilon
-            )
-            return self.weight * hidden_states.to(input_dtype)
+            # hidden_states = hidden_states.to(torch.float32)
+            # variance = hidden_states.pow(2).mean(-1, keepdim=True)
+            # hidden_states = hidden_states * torch.rsqrt(
+            #     variance + self.variance_epsilon
+            # )
+            # return self.weight * hidden_states.to(input_dtype)
+            return torch_npu.npu_rms_norm(hidden_states.to(input_dtype), self.weight, epsilon=self.variance_epsilon)[0]
 
 
 class Qwen3Attention:
