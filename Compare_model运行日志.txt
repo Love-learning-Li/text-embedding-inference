@@ -1,0 +1,142 @@
+root@example:text-embeddings-inference# python3 compare_model.py 
+2026-02-28 09:13:39.761 | INFO     | __main__:setup_logging:25 - Log file: /home/HwHiAiUser/text-embeddings-inference/logs/model_comparison_20260228_091339.log
+2026-02-28 09:13:39.762 | INFO     | __main__:compare_models:148 - ================================================================================
+2026-02-28 09:13:39.762 | INFO     | __main__:compare_models:149 - Starting Model Comparison Test
+2026-02-28 09:13:39.763 | INFO     | __main__:compare_models:150 - Model path: /home/HwHiAiUser/model/Qwen3-Embedding-0.6B
+2026-02-28 09:13:39.763 | INFO     | __main__:compare_models:151 - Input text: 'The capital of China is Beijing.'
+2026-02-28 09:13:39.763 | INFO     | __main__:compare_models:152 - Device: npu
+2026-02-28 09:13:39.764 | INFO     | __main__:compare_models:153 - Dtype: torch.float32
+2026-02-28 09:13:39.764 | INFO     | __main__:compare_models:154 - ================================================================================
+2026-02-28 09:13:40.317 | WARNING  | text_embeddings_server.models:<module>:31 - Could not import Flash Attention enabled models: No module named 'text_embeddings_server.models.flash_roberta'
+2026-02-28 09:13:40.318 | INFO     | __main__:test_flash_qwen3_model:43 - ================================================================================
+2026-02-28 09:13:40.318 | INFO     | __main__:test_flash_qwen3_model:44 - Testing FlashQwen3 Model
+2026-02-28 09:13:40.318 | INFO     | __main__:test_flash_qwen3_model:45 - ================================================================================
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+        - Avoid using `tokenizers` before the fork if possible
+        - Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+2026-02-28 09:13:54.332 | INFO     | __main__:test_flash_qwen3_model:57 - Input text: 'The capital of China is Beijing.'
+2026-02-28 09:13:54.334 | INFO     | __main__:test_flash_qwen3_model:58 - Input IDs shape: torch.Size([1, 8])
+2026-02-28 09:13:54.335 | INFO     | __main__:test_flash_qwen3_model:59 - Input IDs: [[785, 6722, 315, 5616, 374, 26549, 13, 151643]]
+2026-02-28 09:13:54.335 | INFO     | __main__:test_flash_qwen3_model:60 - Attention mask: [[1, 1, 1, 1, 1, 1, 1, 1]]
+2026-02-28 09:13:54.336 | INFO     | __main__:test_flash_qwen3_model:61 - Position IDs: [[0, 1, 2, 3, 4, 5, 6, 7]]
+2026-02-28 09:13:54.344 | INFO     | text_embeddings_server.models.flash_qwen3:__init__:606 - Model config: hidden_size=1024, intermediate_size=3072, num_layers=28
+2026-02-28 09:13:54.345 | INFO     | text_embeddings_server.models.flash_qwen3:__init__:625 - ----------------------- FlshQwen3 load 单文件模型
+2026-02-28 09:14:03.438 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:13.992 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:13.998 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.004 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.010 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.016 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.022 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.028 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.034 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.040 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.045 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.051 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.056 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.062 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.067 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.072 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.078 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.084 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.089 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.095 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.100 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.105 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.111 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.116 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.122 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.128 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.134 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.139 | INFO     | text_embeddings_server.models.flash_qwen3:forward:326 - 走bsnd格式的输入分支了: False
+2026-02-28 09:14:14.236 | INFO     | __main__:test_flash_qwen3_model:86 - FlashQwen3 embedding shape: torch.Size([1024])
+2026-02-28 09:14:14.298 | INFO     | __main__:test_flash_qwen3_model:87 - FlashQwen3 embedding mean: -0.029984
+2026-02-28 09:14:14.355 | INFO     | __main__:test_flash_qwen3_model:88 - FlashQwen3 embedding std: 3.720579
+2026-02-28 09:14:14.412 | INFO     | __main__:compare_models:158 - 
+================================================================================
+
+2026-02-28 09:14:14.413 | INFO     | __main__:test_default_model:95 - ================================================================================
+2026-02-28 09:14:14.413 | INFO     | __main__:test_default_model:96 - Testing Default Model (AutoModel)
+2026-02-28 09:14:14.413 | INFO     | __main__:test_default_model:97 - ================================================================================
+2026-02-28 09:14:15.192 | INFO     | __main__:test_default_model:106 - Input text: 'The capital of China is Beijing.'
+2026-02-28 09:14:15.193 | INFO     | __main__:test_default_model:107 - Input IDs shape: torch.Size([1, 8])
+2026-02-28 09:14:15.193 | INFO     | __main__:test_default_model:108 - Input IDs: [[785, 6722, 315, 5616, 374, 26549, 13, 151643]]
+2026-02-28 09:14:15.193 | INFO     | __main__:test_default_model:109 - Attention mask: [[1, 1, 1, 1, 1, 1, 1, 1]]
+2026-02-28 09:14:15.193 | INFO     | __main__:test_default_model:110 - Position IDs: [[0, 1, 2, 3, 4, 5, 6, 7]]
+2026-02-28 09:14:22.843 | INFO     | text_embeddings_server.utils.default_model_logger:_register_embedding_hooks:73 - [DefaultModelLogger] Registered hook for embed_tokens
+2026-02-28 09:14:22.847 | INFO     | text_embeddings_server.utils.default_model_logger:_register_norm_hooks:162 - [DefaultModelLogger] Registered hook for final norm
+2026-02-28 09:14:22.847 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:22.847] [DefaultModel] ==================== DefaultModel Forward Start ====================
+2026-02-28 09:14:22.954 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:22.847] [DefaultModel] Forward.kwarg_input_ids | shape=(1, 8), dtype=torch.int64, device=npu:0, mean=24002.125000, std=52330.289062, min=13.000000, max=151643.000000
+2026-02-28 09:14:22.956 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:22.954] [DefaultModel] Forward.kwarg_attention_mask | shape=(1, 8), dtype=torch.int64, device=npu:0, mean=1.000000, std=0.000000, min=1.000000, max=1.000000
+2026-02-28 09:14:22.958 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:22.956] [DefaultModel] Forward.kwarg_position_ids | shape=(1, 8), dtype=torch.int64, device=npu:0, mean=3.500000, std=2.449490, min=0.000000, max=7.000000
+2026-02-28 09:14:22.958 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:22.958] [DefaultModel] ==================== embed_tokens Start ====================
+2026-02-28 09:14:22.960 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:22.958] [DefaultModel.Hook] embed_tokens.input_0 | shape=(1, 8), dtype=torch.int64, device=npu:0, mean=24002.125000, std=52330.289062, min=13.000000, max=151643.000000
+2026-02-28 09:14:22.961 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:22.960] [DefaultModel.Hook] embed_tokens.output | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.000183, std=0.027211, min=-0.115234, max=0.106445
+2026-02-28 09:14:22.962 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:22.962] [DefaultModel] ==================== embed_tokens End ====================
+2026-02-28 09:14:23.015 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.015] [DefaultModel] ==================== layer_0.input_layernorm Start ====================
+2026-02-28 09:14:23.016 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.015] [DefaultModel.Hook] layer_0.input_layernorm.input_0 | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.000183, std=0.027211, min=-0.115234, max=0.106445
+2026-02-28 09:14:23.017 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.016] [DefaultModel.Hook] layer_0.input_layernorm.output | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.004233, std=0.208886, min=-2.702125, max=1.753081
+2026-02-28 09:14:23.018 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.018] [DefaultModel] ==================== layer_0.input_layernorm End ====================
+2026-02-28 09:14:23.018 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.018] [DefaultModel] ==================== layer_0.attention.q_proj Start ====================
+2026-02-28 09:14:23.020 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.018] [DefaultModel.Hook] layer_0.attention.q_proj.output | shape=(1, 8, 2048), dtype=torch.float32, device=npu:0, mean=-0.001686, std=0.374391, min=-5.347611, max=4.955161
+2026-02-28 09:14:23.020 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.020] [DefaultModel] ==================== layer_0.attention.q_proj End ====================
+2026-02-28 09:14:23.022 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.022] [DefaultModel] ==================== layer_0.attention.q_norm Start ====================
+2026-02-28 09:14:23.023 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.022] [DefaultModel.Hook] layer_0.attention.q_norm.input_0 | shape=(1, 8, 16, 128), dtype=torch.float32, device=npu:0, mean=-0.001686, std=0.374391, min=-5.347611, max=4.955161
+2026-02-28 09:14:23.024 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.023] [DefaultModel.Hook] layer_0.attention.q_norm.output | shape=(1, 8, 16, 128), dtype=torch.float32, device=npu:0, mean=-0.005460, std=2.260420, min=-30.422319, max=30.562679
+2026-02-28 09:14:23.025 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.025] [DefaultModel] ==================== layer_0.attention.q_norm End ====================
+2026-02-28 09:14:23.025 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.025] [DefaultModel] ==================== layer_0.attention.k_proj Start ====================
+2026-02-28 09:14:23.026 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.025] [DefaultModel.Hook] layer_0.attention.k_proj.output | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=0.005154, std=0.396400, min=-3.606889, max=5.102190
+2026-02-28 09:14:23.027 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.027] [DefaultModel] ==================== layer_0.attention.k_proj End ====================
+2026-02-28 09:14:23.028 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.028] [DefaultModel] ==================== layer_0.attention.k_norm Start ====================
+2026-02-28 09:14:23.030 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.028] [DefaultModel.Hook] layer_0.attention.k_norm.input_0 | shape=(1, 8, 8, 128), dtype=torch.float32, device=npu:0, mean=0.005154, std=0.396400, min=-3.606889, max=5.102190
+2026-02-28 09:14:23.031 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.030] [DefaultModel.Hook] layer_0.attention.k_norm.output | shape=(1, 8, 8, 128), dtype=torch.float32, device=npu:0, mean=-0.001968, std=20.034845, min=-412.143402, max=393.479279
+2026-02-28 09:14:23.031 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.031] [DefaultModel] ==================== layer_0.attention.k_norm End ====================
+2026-02-28 09:14:23.032 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.032] [DefaultModel] ==================== layer_0.attention.v_proj Start ====================
+2026-02-28 09:14:23.033 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.032] [DefaultModel.Hook] layer_0.attention.v_proj.output | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.005225, std=0.148704, min=-1.216940, max=1.081127
+2026-02-28 09:14:23.033 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.033] [DefaultModel] ==================== layer_0.attention.v_proj End ====================
+2026-02-28 09:14:23.127 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.127] [DefaultModel] ==================== layer_0.attention.o_proj Start ====================
+2026-02-28 09:14:23.128 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.127] [DefaultModel.Hook] layer_0.attention.o_proj.input_0 | shape=(1, 8, 2048), dtype=torch.float32, device=npu:0, mean=-0.006452, std=0.127066, min=-1.174673, max=1.050875
+2026-02-28 09:14:23.129 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.128] [DefaultModel.Hook] layer_0.attention.o_proj.output | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.000862, std=0.194667, min=-1.324259, max=3.042439
+2026-02-28 09:14:23.129 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.129] [DefaultModel] ==================== layer_0.attention.o_proj End ====================
+2026-02-28 09:14:23.131 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.131] [DefaultModel] ==================== layer_0.post_attention_layernorm Start ====================
+2026-02-28 09:14:23.132 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.131] [DefaultModel.Hook] layer_0.post_attention_layernorm.input_0 | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.001045, std=0.195944, min=-1.300821, max=2.992146
+2026-02-28 09:14:23.134 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.132] [DefaultModel.Hook] layer_0.post_attention_layernorm.output | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.018377, std=0.454097, min=-9.983624, max=2.380964
+2026-02-28 09:14:23.134 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.134] [DefaultModel] ==================== layer_0.post_attention_layernorm End ====================
+2026-02-28 09:14:23.134 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.134] [DefaultModel] ==================== layer_0.mlp.gate_proj Start ====================
+2026-02-28 09:14:23.136 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.135] [DefaultModel.Hook] layer_0.mlp.gate_proj.input_0 | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.018377, std=0.454097, min=-9.983624, max=2.380964
+2026-02-28 09:14:23.138 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.136] [DefaultModel.Hook] layer_0.mlp.gate_proj.output | shape=(1, 8, 3072), dtype=torch.float32, device=npu:0, mean=-0.469053, std=0.757705, min=-5.767384, max=3.849828
+2026-02-28 09:14:23.138 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.138] [DefaultModel] ==================== layer_0.mlp.gate_proj End ====================
+2026-02-28 09:14:23.139 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.139] [DefaultModel] ==================== layer_0.mlp.up_proj Start ====================
+2026-02-28 09:14:23.140 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.139] [DefaultModel.Hook] layer_0.mlp.up_proj.input_0 | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.018377, std=0.454097, min=-9.983624, max=2.380964
+2026-02-28 09:14:23.141 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.140] [DefaultModel.Hook] layer_0.mlp.up_proj.output | shape=(1, 8, 3072), dtype=torch.float32, device=npu:0, mean=-0.001367, std=0.342698, min=-3.023184, max=2.421545
+2026-02-28 09:14:23.141 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.141] [DefaultModel] ==================== layer_0.mlp.up_proj End ====================
+2026-02-28 09:14:23.142 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.142] [DefaultModel] ==================== layer_0.mlp.down_proj Start ====================
+2026-02-28 09:14:23.143 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.142] [DefaultModel.Hook] layer_0.mlp.down_proj.input_0 | shape=(1, 8, 3072), dtype=torch.float32, device=npu:0, mean=0.001926, std=0.118223, min=-4.616105, max=8.644417
+2026-02-28 09:14:23.144 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:23.143] [DefaultModel.Hook] layer_0.mlp.down_proj.output | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=0.002044, std=0.192851, min=-1.746755, max=4.436610
+2026-02-28 09:14:23.144 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:23.144] [DefaultModel] ==================== layer_0.mlp.down_proj End ====================
+2026-02-28 09:14:24.158 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:24.158] [DefaultModel] ==================== final_norm Start ====================
+2026-02-28 09:14:24.159 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:24.158] [DefaultModel.Hook] final_norm.input_0 | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.178973, std=19.517817, min=-514.254883, max=141.683838
+2026-02-28 09:14:24.160 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:24.159] [DefaultModel.Hook] final_norm.output | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.047079, std=3.657106, min=-38.058384, max=14.728110
+2026-02-28 09:14:24.160 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:24.160] [DefaultModel] ==================== final_norm End ====================
+2026-02-28 09:14:24.161 | INFO     | text_embeddings_server.utils.default_model_logger:log_tensor_stats_default:22 - [2026-02-28 09:14:24.160] [DefaultModel] Forward.last_hidden_state | shape=(1, 8, 1024), dtype=torch.float32, device=npu:0, mean=-0.047079, std=3.657106, min=-38.058384, max=14.728110
+2026-02-28 09:14:24.161 | INFO     | text_embeddings_server.utils.default_model_logger:log_separator_default:30 - [2026-02-28 09:14:24.161] [DefaultModel] ==================== DefaultModel Forward End ====================
+2026-02-28 09:14:24.162 | INFO     | __main__:test_default_model:127 - Default model hidden states shape: torch.Size([1, 8, 1024])
+2026-02-28 09:14:24.162 | INFO     | __main__:test_default_model:128 - Default model hidden states mean: -0.047079
+2026-02-28 09:14:24.163 | INFO     | __main__:test_default_model:129 - Default model hidden states std: 3.657106
+2026-02-28 09:14:24.199 | INFO     | __main__:test_default_model:132 - Default model embedding shape: torch.Size([1, 1024])
+2026-02-28 09:14:24.200 | INFO     | __main__:test_default_model:133 - Default model embedding mean: -0.029984
+2026-02-28 09:14:24.200 | INFO     | __main__:test_default_model:134 - Default model embedding std: 3.720579
+2026-02-28 09:14:24.201 | INFO     | text_embeddings_server.utils.default_model_logger:remove_hooks:168 - [DefaultModelLogger] All hooks removed
+2026-02-28 09:14:24.260 | INFO     | __main__:compare_models:162 - 
+================================================================================
+2026-02-28 09:14:24.263 | INFO     | __main__:compare_models:163 - Comparison Results
+2026-02-28 09:14:24.264 | INFO     | __main__:compare_models:164 - ================================================================================
+2026-02-28 09:14:24.319 | INFO     | __main__:compare_models:168 - Cosine Similarity: 1.000000
+2026-02-28 09:14:24.320 | INFO     | __main__:compare_models:169 - FlashQwen3 embedding norm: 119.004257
+2026-02-28 09:14:24.321 | INFO     | __main__:compare_models:170 - Default model embedding norm: 119.004250
+2026-02-28 09:14:24.332 | INFO     | __main__:compare_models:173 - Mean absolute difference: 0.000005
+2026-02-28 09:14:24.332 | INFO     | __main__:compare_models:174 - Max absolute difference: 0.000025
+2026-02-28 09:14:24.332 | SUCCESS  | __main__:compare_models:177 - Models are highly similar! (similarity=1.000000)
+2026-02-28 09:14:24.332 | INFO     | __main__:compare_models:183 - 
+Full log saved to: /home/HwHiAiUser/text-embeddings-inference/logs/model_comparison_20260228_091339.log
