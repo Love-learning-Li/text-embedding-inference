@@ -81,11 +81,6 @@ def rotate_half(x):
 def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    # 在报错代码前添加打印，查看形状
-    logger.info(f"q shape:{q.shape}")
-    logger.info(f"cos shape:{cos.shape}")
-    logger.info(f"sin shape:{sin.shape}")
-    logger.info(f"rotate_half(q) shape:{rotate_half(q).shape}")
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -219,44 +214,67 @@ class Qwen3Attention:
         log_separator(f"Qwen3Attention Layer Start")
         log_tensor_stats("Attention.input_hidden_states", hidden_states, "FlashQwen3.Attention")
         
-        input_shape = hidden_states.shape[:-1]
-        hidden_shape_q = (*input_shape, -1, self.head_dim)
-        hidden_shape_kv = (*input_shape, self.num_key_value_heads, self.head_dim)
+        is_tnd = hidden_states.dim() == 2
 
-        q_proj_out = F.linear(hidden_states, self.q_proj_weight)
-        log_tensor_stats("Attention.q_proj_output", q_proj_out, "FlashQwen3.Attention")
-        
-        # q = self.q_norm.forward(q_proj_out.view(hidden_shape_q))
-        q = self.q_norm.forward(q_proj_out.view(hidden_shape_q)).transpose(1, 2)  # [1, 16, 8, 128]
-        log_tensor_stats("Attention.q_after_q_norm", q, "FlashQwen3.Attention")
-        
-        k_proj_out = F.linear(hidden_states, self.k_proj_weight)
-        log_tensor_stats("Attention.k_proj_output", k_proj_out, "FlashQwen3.Attention")
-        
-        # k = self.k_norm.forward(k_proj_out.view(hidden_shape_kv))
-        k = self.k_norm.forward(k_proj_out.view(hidden_shape_kv)).transpose(1, 2)  # [1, 8, 8, 128]
-        log_tensor_stats("Attention.k_after_k_norm", k, "FlashQwen3.Attention")
-        
-        # v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape_kv)
-        v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape_kv).transpose(1, 2)
-        log_tensor_stats("Attention.v_proj_output", v, "FlashQwen3.Attention")
-        
-        cos, sin = position_embeddings
-        log_tensor_stats("Attention.rope_cos", cos, "FlashQwen3.Attention")
-        log_tensor_stats("Attention.rope_sin", sin, "FlashQwen3.Attention")
-        
-        # q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
-        log_tensor_stats("Attention.q_after_rope", q, "FlashQwen3.Attention")
-        log_tensor_stats("Attention.k_after_rope", k, "FlashQwen3.Attention")
-        
-        if self.num_key_value_groups > 1:
-            k = k.repeat_interleave(self.num_key_value_groups, dim=1)
-            v = v.repeat_interleave(self.num_key_value_groups, dim=1)
-            log_tensor_stats("Attention.k_after_repeat", k, "FlashQwen3.Attention")
-            log_tensor_stats("Attention.v_after_repeat", v, "FlashQwen3.Attention")
-        
-        attn_output = torch.empty_like(q)
+        if is_tnd:
+            input_shape = hidden_states.shape[:-1]
+            q_proj_out = F.linear(hidden_states, self.q_proj_weight)
+            q = self.q_norm.forward(
+                q_proj_out.view(*input_shape, self.num_heads, self.head_dim)
+            )
+            log_tensor_stats("Attention.q_after_q_norm", q, "FlashQwen3.Attention")
+
+            k_proj_out = F.linear(hidden_states, self.k_proj_weight)
+            k = self.k_norm.forward(
+                k_proj_out.view(*input_shape, self.num_key_value_heads, self.head_dim)
+            )
+            log_tensor_stats("Attention.k_after_k_norm", k, "FlashQwen3.Attention")
+
+            v = F.linear(hidden_states, self.v_proj_weight).view(
+                *input_shape, self.num_key_value_heads, self.head_dim
+            )
+
+            cos, sin = position_embeddings
+            if cos.dim() == 3 and cos.shape[0] == 1:
+                cos = cos.squeeze(0)
+                sin = sin.squeeze(0)
+
+            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+            log_tensor_stats("Attention.q_after_rope", q, "FlashQwen3.Attention")
+            log_tensor_stats("Attention.k_after_rope", k, "FlashQwen3.Attention")
+
+            if self.num_key_value_groups > 1:
+                k = k.repeat_interleave(self.num_key_value_groups, dim=1)
+                v = v.repeat_interleave(self.num_key_value_groups, dim=1)
+
+            attn_output = torch.empty_like(q)
+        else:
+            input_shape = hidden_states.shape[:-1]
+            hidden_shape_q = (*input_shape, -1, self.head_dim)
+            hidden_shape_kv = (*input_shape, self.num_key_value_heads, self.head_dim)
+
+            q_proj_out = F.linear(hidden_states, self.q_proj_weight)
+            q = self.q_norm.forward(q_proj_out.view(hidden_shape_q)).transpose(1, 2)
+            log_tensor_stats("Attention.q_after_q_norm", q, "FlashQwen3.Attention")
+
+            k_proj_out = F.linear(hidden_states, self.k_proj_weight)
+            k = self.k_norm.forward(k_proj_out.view(hidden_shape_kv)).transpose(1, 2)
+            log_tensor_stats("Attention.k_after_k_norm", k, "FlashQwen3.Attention")
+
+            v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape_kv).transpose(1, 2)
+
+            cos, sin = position_embeddings
+
+            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+            log_tensor_stats("Attention.q_after_rope", q, "FlashQwen3.Attention")
+            log_tensor_stats("Attention.k_after_rope", k, "FlashQwen3.Attention")
+
+            if self.num_key_value_groups > 1:
+                k = k.repeat_interleave(self.num_key_value_groups, dim=1)
+                v = v.repeat_interleave(self.num_key_value_groups, dim=1)
+
+            attn_output = torch.empty_like(q)
+
         attention(
             q,
             k,
@@ -269,10 +287,11 @@ class Qwen3Attention:
             is_causal=True,
             attn_mask=attn_mask,
         )
-        # log_tensor_stats("Attention.attn_output_before_o_proj", attn_output, "FlashQwen3.Attention")
-        
-        # attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
+
+        if is_tnd:
+            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        else:
+            attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
         attn_output = F.linear(attn_output, self.o_proj_weight, bias=None)
         log_tensor_stats("Attention.attn_output_final", attn_output, "FlashQwen3.Attention")
         log_separator(f"Qwen3Attention Layer End")
@@ -314,25 +333,11 @@ class Qwen3MLP:
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_state):
-        log_separator("Qwen3MLP Start")
-        log_tensor_stats("MLP.input_hidden_state", hidden_state, "FlashQwen3.MLP")
-        
         gated_hidden_states = F.linear(hidden_state, self.gate_proj_weight)
-        log_tensor_stats("MLP.gate_proj_output", gated_hidden_states, "FlashQwen3.MLP")
-        
         uped_hidden_states = F.linear(hidden_state, self.up_proj_weight)
-        log_tensor_stats("MLP.up_proj_output", uped_hidden_states, "FlashQwen3.MLP")
-        
         activated = self.act_fn(gated_hidden_states)
-        log_tensor_stats("MLP.after_activation", activated, "FlashQwen3.MLP")
-        
         multiplied = activated * uped_hidden_states
-        log_tensor_stats("MLP.after_multiply", multiplied, "FlashQwen3.MLP")
-        
         output = F.linear(multiplied, self.down_proj_weight)
-        log_tensor_stats("MLP.down_proj_output", output, "FlashQwen3.MLP")
-        log_separator("Qwen3MLP End")
-        
         return output
 
 
@@ -372,29 +377,23 @@ class Qwen3DecoderLayer:
         self, hidden_states, position_embeddings, cu_seqlens, max_s, attn_mask=None
     ):
         log_separator(f"DecoderLayer {self._layer_idx if hasattr(self, '_layer_idx') else ''} Start")
-        log_tensor_stats("DecoderLayer.input_hidden_states", hidden_states, "FlashQwen3.DecoderLayer")
         
         residual = hidden_states
         hidden_states = self.input_layernorm.forward(hidden_states)
-        log_tensor_stats("DecoderLayer.after_input_layernorm", hidden_states, "FlashQwen3.DecoderLayer")
         
         hidden_states = self.attention.forward(
             hidden_states, position_embeddings, cu_seqlens, max_s, attn_mask
         )
-        log_tensor_stats("DecoderLayer.after_attention", hidden_states, "FlashQwen3.DecoderLayer")
         
         hidden_states = residual + hidden_states
-        log_tensor_stats("DecoderLayer.after_residual1", hidden_states, "FlashQwen3.DecoderLayer")
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm.forward(hidden_states)
-        log_tensor_stats("DecoderLayer.after_post_attention_layernorm", hidden_states, "FlashQwen3.DecoderLayer")
         
         hidden_states = self.mlp.forward(hidden_states)
-        log_tensor_stats("DecoderLayer.after_mlp", hidden_states, "FlashQwen3.DecoderLayer")
         
         hidden_states = residual + hidden_states
-        log_tensor_stats("DecoderLayer.after_residual2", hidden_states, "FlashQwen3.DecoderLayer")
+        log_tensor_stats("DecoderLayer.output_hidden_states", hidden_states, "FlashQwen3.DecoderLayer")
         log_separator(f"DecoderLayer {self._layer_idx if hasattr(self, '_layer_idx') else ''} End")
 
         return hidden_states
@@ -409,16 +408,36 @@ class Qwen3RotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        logger.info(f"position_ids {position_ids}")
+        log_tensor_stats("RotaryEmbedding.position_ids", position_ids, "FlashQwen3.RotaryEmbedding")
+        
+        if position_ids.dim() == 1:
+            position_ids = position_ids.unsqueeze(0)
+
+        inv_freq_expanded = (
+            self.inv_freq[None, :, None]
+            .float()
+            .expand(position_ids.shape[0], -1, 1)
+            .to(x.device)
+        )
+        
         position_ids_expanded = position_ids[:, None, :].float()
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        device_type = (
+            x.device.type
+            if isinstance(x.device.type, str) and x.device.type != "mps"
+            else "cpu"
+        )
+        with torch.autocast(device_type=device_type, enabled=False):
+            freqs = (
+                inv_freq_expanded.float() @ position_ids_expanded.float()
+            ).transpose(1, 2)
+            
             emb = torch.cat((freqs, freqs), dim=-1)
+            
             cos = emb.cos() * self.attention_scaling
             sin = emb.sin() * self.attention_scaling
+            log_tensor_stats("RotaryEmbedding.cos_output", cos, "FlashQwen3.RotaryEmbedding")
+            log_tensor_stats("RotaryEmbedding.sin_output", sin, "FlashQwen3.RotaryEmbedding")
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
@@ -471,13 +490,11 @@ class FlashQwen3Model:
         attn_mask=None,
     ):
         log_separator("FlashQwen3Model Forward Start")
-        log_tensor_stats("Model.input_ids", input_ids, "FlashQwen3.Model")
         log_tensor_stats("Model.position_ids", position_ids, "FlashQwen3.Model")
         log_tensor_stats("Model.cu_seqlens", cu_seqlens, "FlashQwen3.Model")
         logger.info(f"[FlashQwen3.Model] max_s={max_s}")
         
         inputs_embeds = nn.functional.embedding(input_ids, self.word_embeddings_weight)
-        log_tensor_stats("Model.inputs_embeds", inputs_embeds, "FlashQwen3.Model")
         
         hidden_states = inputs_embeds
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
@@ -547,21 +564,18 @@ class FlashQwen3(Model):
         
         if isinstance(batch, PaddedBatch):
             log_separator("Processing PaddedBatch")
-            log_tensor_stats("Embed.input_ids", batch.input_ids, "FlashQwen3.Embed")
             log_tensor_stats("Embed.position_ids", batch.position_ids, "FlashQwen3.Embed")
-            log_tensor_stats("Embed.attention_mask", batch.attention_mask, "FlashQwen3.Embed")
             
             input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
-            max_input_lens = 0
+            max_input_lens = int(input_lens.max().item())
             cu_seqlens = torch.cat(
                 (input_lens.new_tensor([0]), input_lens.cumsum(-1).int())
             )
             log_tensor_stats("Embed.cu_seqlens", cu_seqlens, "FlashQwen3.Embed")
             
             mask = batch.attention_mask.bool()
-            bsz, tgt_len = mask.size()
+            _, tgt_len = mask.size()
             attn_mask = _generate_attn_mask(tgt_len, self.dtype).unsqueeze(0).unsqueeze(0)
-            log_tensor_stats("Embed.attn_mask", attn_mask, "FlashQwen3.Embed")
             
             pooling_attention_mask = batch.attention_mask
             
@@ -575,7 +589,6 @@ class FlashQwen3(Model):
             )
             
             hidden_states = output.last_hidden_state
-            log_tensor_stats("Embed.hidden_states_before_reshape", hidden_states, "FlashQwen3.Embed")
             
             if hidden_states.dim() == 2:
                 hidden_states = hidden_states.unsqueeze(1)
@@ -583,8 +596,6 @@ class FlashQwen3(Model):
             
         elif isinstance(batch, FlashBatch):
             log_separator("Processing FlashBatch")
-            log_tensor_stats("Embed.input_ids", batch.input_ids, "FlashQwen3.Embed")
-            log_tensor_stats("Embed.position_ids", batch.position_ids, "FlashQwen3.Embed")
             log_tensor_stats("Embed.cu_seqlens", batch.cu_seqlens, "FlashQwen3.Embed")
             
             cu_seqlens = batch.cu_seqlens
@@ -606,7 +617,6 @@ class FlashQwen3(Model):
             )
             
             hidden_states = output.last_hidden_state
-            log_tensor_stats("Embed.hidden_states_from_model", hidden_states, "FlashQwen3.Embed")
             
             batch_hidden_states = torch.zeros(
                 (batch.size, batch.max_s, self.hidden_size),
@@ -625,9 +635,6 @@ class FlashQwen3(Model):
                 batch_hidden_states[i, :seq_len, :] = hidden_states[offset:offset + seq_len, :]
                 pooling_attention_mask[i, :seq_len] = 1
                 offset += seq_len
-            
-            log_tensor_stats("Embed.batch_hidden_states", batch_hidden_states, "FlashQwen3.Embed")
-            log_tensor_stats("Embed.pooling_attention_mask", pooling_attention_mask, "FlashQwen3.Embed")
             
             output = BaseModelOutputWithPast(last_hidden_state=batch_hidden_states)
 
