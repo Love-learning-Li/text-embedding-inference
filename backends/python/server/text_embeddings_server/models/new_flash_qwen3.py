@@ -21,7 +21,7 @@ tracer = trace.get_tracer(__name__)
 
 _LOGGED_ONCE_KEYS = set()
 SHAPE_LOG_LEVEL = "warning"
-_NPU_ROTARY_TND_AVAILABLE = False
+_NPU_ROTARY_TND_AVAILABLE = True
 
 
 def log_once(level: str, key: str, message: str):
@@ -102,9 +102,6 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-NPU_ROTARY_USE_NATIVE_MATMUL = False
-
-
 def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     """
     Apply rotary position embedding.
@@ -147,7 +144,7 @@ def _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim=1):
     sin_native = _normalize_coeff_for_tnd_native(sin)
 
     if cos_native is None or sin_native is None:
-        # log_once("warning", "rope_native_bad_coeff_layout", f"[RoPE] native fallback skipped: unsupported coeff shape, cos={tuple(cos.shape)}, sin={tuple(sin.shape)}, q={tuple(q.shape)}")
+        log_once("warning", "rope_native_bad_coeff_layout", f"[RoPE] native fallback skipped: unsupported coeff shape, cos={tuple(cos.shape)}, sin={tuple(sin.shape)}, q={tuple(q.shape)}")
         return q, k
 
     cos_native = cos_native.to(device=q.device, dtype=q.dtype)
@@ -174,12 +171,12 @@ def _apply_rotary_pos_emb_npu_rotary(q, k, cos, sin, unsqueeze_dim=1):
         return _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim)
 
     if q.dim() != 3 or k.dim() != 3:
-        # log_once("warning", "rope_non_tnd_input", "[RoPE] npu_rotary_mul skipped: only TND 3D input is supported in this model")
+        log_once("warning", "rope_non_tnd_input", "[RoPE] npu_rotary_mul skipped: only TND 3D input is supported in this model")
         return q, k
 
     t, n, d = q.shape
     if d % 2 != 0:
-        # log_once("warning", "rope_last_dim_not_even", "[RoPE] npu_rotary_mul skipped: last dim is not even, keep q/k unchanged")
+        log_once("warning", "rope_last_dim_not_even", "[RoPE] npu_rotary_mul skipped: last dim is not even, keep q/k unchanged")
         return q, k
 
     if cos.dim() == 3 and cos.shape[0] == 1 and cos.shape[1] == t and cos.shape[2] == d:
@@ -189,7 +186,7 @@ def _apply_rotary_pos_emb_npu_rotary(q, k, cos, sin, unsqueeze_dim=1):
     elif cos.dim() == 3 and cos.shape[0] == t and cos.shape[1] in (1, n) and cos.shape[2] == d:
         cos_npu = cos
     else:
-        # log_once("warning", "rope_bad_cos_layout", f"[RoPE] unsupported cos shape={tuple(cos.shape)} for q={tuple(q.shape)}")
+        log_once("warning", "rope_bad_cos_layout", f"[RoPE] unsupported cos shape={tuple(cos.shape)} for q={tuple(q.shape)}")
         return q, k
 
     if sin.dim() == 3 and sin.shape[0] == 1 and sin.shape[1] == t and sin.shape[2] == d:
@@ -199,20 +196,21 @@ def _apply_rotary_pos_emb_npu_rotary(q, k, cos, sin, unsqueeze_dim=1):
     elif sin.dim() == 3 and sin.shape[0] == t and sin.shape[1] in (1, n) and sin.shape[2] == d:
         sin_npu = sin
     else:
-        # log_once("warning", "rope_bad_sin_layout", f"[RoPE] unsupported sin shape={tuple(sin.shape)} for q={tuple(q.shape)}")
+        log_once("warning", "rope_bad_sin_layout", f"[RoPE] unsupported sin shape={tuple(sin.shape)} for q={tuple(q.shape)}")
         return q, k
 
-    # log_shape_once("rope_tnd_shape_once", f"[RoPE][shape] TND shapes: q={tuple(q.shape)}, cos={tuple(cos_npu.shape)}, sin={tuple(sin_npu.shape)}")
+    log_shape_once("rope_tnd_shape_once", f"[RoPE][shape] TND shapes: q={tuple(q.shape)}, cos={tuple(cos_npu.shape)}, sin={tuple(sin_npu.shape)}")
 
     try:
         cos_npu = cos_npu.to(device=q.device, dtype=q.dtype)
         sin_npu = sin_npu.to(device=q.device, dtype=q.dtype)
         q_embed = torch_npu.npu_rotary_mul(q, cos_npu, sin_npu)
         k_embed = torch_npu.npu_rotary_mul(k, cos_npu, sin_npu)
+        log_once("#####", "use npu_rotary mul achieve RoPE",  "_apply_rotary_pos_emb_npu_rotary")
         return q_embed, k_embed
     except RuntimeError as error:
         _NPU_ROTARY_TND_AVAILABLE = False
-        # log_once("warning", "rope_runtime_error_disable_npu", f"[RoPE] npu_rotary_mul failed and disabled for this process: {error}; switch to native TND RoPE")
+        log_once("warning", "rope_runtime_error_disable_npu", f"[RoPE] npu_rotary_mul failed and disabled for this process: {error}; switch to native TND RoPE")
         return _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim)
 
     return q, k
@@ -632,7 +630,7 @@ class FlashQwen3(Model):
     ):
         config = Qwen3Config.from_pretrained(model_path)
 
-        # logger.info(f"Model config: hidden_size={config.hidden_size}, "
+        logger.info(f"Model config: hidden_size={config.hidden_size}, "
             f"intermediate_size={config.intermediate_size}, "
             f"num_layers={config.num_hidden_layers}")
 
@@ -645,13 +643,13 @@ class FlashQwen3(Model):
         index_file = model_path / "model.safetensors.index.json"
         if index_file.exists():
             # 分片模型
-            # logger.info(f"----------------------- FlshQwen3 load 分片模型权重")
+            logger.info(f"----------------------- FlshQwen3 load 分片模型权重")
             with open(index_file, "r") as f:
                 index_data = json.load(f)
             weight_map = index_data["weight_map"]
         else:
             # 单文件模型
-            # logger.info(f"----------------------- FlshQwen3 load 单文件模型")
+            logger.info(f"----------------------- FlshQwen3 load 单文件模型")
             weight_map = None
 
         model = FlashQwen3Model(model_path, weight_map, device, dtype, config)
@@ -692,7 +690,7 @@ class FlashQwen3(Model):
                     f"[FlashQwen3.embed] TND required: input_ids/position_ids must be 1D after flatten, got input_ids={tuple(input_ids.shape)}, position_ids={tuple(position_ids.shape)}"
                 )
 
-            # log_shape_once(
+            log_shape_once(
                 "embed_tnd_input_shapes",
                 f"[Embed][shape] FlashBatch shapes: input_ids={tuple(input_ids.shape)}, position_ids={tuple(position_ids.shape)}, cu_seqlens={tuple(cu_seqlens.shape)}, max_s={batch.max_s}, pool={self.pool_mode}",
             )
