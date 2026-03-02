@@ -20,8 +20,6 @@ import datetime
 tracer = trace.get_tracer(__name__)
 
 _LOGGED_ONCE_KEYS = set()
-SHAPE_LOG_LEVEL = "warning"
-_NPU_ROTARY_TND_AVAILABLE = False
 
 
 def log_once(level: str, key: str, message: str):
@@ -34,10 +32,6 @@ def log_once(level: str, key: str, message: str):
         logger.error(message)
     else:
         logger.info(message)
-
-
-def log_shape_once(key: str, message: str):
-    log_once(SHAPE_LOG_LEVEL, key, message)
 
 # 关闭调试日志，避免性能开销
 DEBUG_LOGGING_ENABLED = False
@@ -118,7 +112,10 @@ def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     - Native matmul works directly with 3D TND format without conversion
     - Layout mismatch between TND input and 11SD cos/sin causes suboptimal performance
     """
-    return _apply_rotary_pos_emb_npu_rotary(q, k, cos, sin, unsqueeze_dim)
+    if NPU_ROTARY_USE_NATIVE_MATMUL:
+        return _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim)
+    else:
+        return _apply_rotary_pos_emb_npu_rotary(q, k, cos, sin, unsqueeze_dim)
 
 
 def _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim=1):
@@ -128,34 +125,12 @@ def _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim=1):
     
     Formula: output = x * cos + rotate_half(x) * sin
     """
-    if q.dim() != 3 or k.dim() != 3:
-        return q, k
-
-    t, n, d = q.shape
-
-    def _normalize_coeff_for_tnd_native(coeff: torch.Tensor) -> Optional[torch.Tensor]:
-        if coeff.dim() == 2 and coeff.shape == (t, d):
-            return coeff.unsqueeze(1)
-        if coeff.dim() == 3:
-            if coeff.shape[0] == 1 and coeff.shape[1] == t and coeff.shape[2] == d:
-                return coeff.squeeze(0).unsqueeze(1)
-            if coeff.shape[0] == t and coeff.shape[1] in (1, n) and coeff.shape[2] == d:
-                return coeff
-        return None
-
-    cos_native = _normalize_coeff_for_tnd_native(cos)
-    sin_native = _normalize_coeff_for_tnd_native(sin)
-
-    if cos_native is None or sin_native is None:
-        # log_once("warning", "rope_native_bad_coeff_layout", f"[RoPE] native fallback skipped: unsupported coeff shape, cos={tuple(cos.shape)}, sin={tuple(sin.shape)}, q={tuple(q.shape)}")
-        return q, k
-
-    cos_native = cos_native.to(device=q.device, dtype=q.dtype)
-    sin_native = sin_native.to(device=q.device, dtype=q.dtype)
-
-    q_embed = (q * cos_native) + (rotate_half(q) * sin_native)
-    k_embed = (k * cos_native) + (rotate_half(k) * sin_native)
-
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    
     return q_embed, k_embed
 
 
@@ -168,52 +143,89 @@ def _apply_rotary_pos_emb_npu_rotary(q, k, cos, sin, unsqueeze_dim=1):
     1. Dimension conversion (TND -> BNSD -> TND)
     2. Layout constraints requiring specific cos/sin shapes
     """
-    global _NPU_ROTARY_TND_AVAILABLE
+    q_orig_dim = q.dim()
 
-    if not _NPU_ROTARY_TND_AVAILABLE:
-        return _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim)
-
-    if q.dim() != 3 or k.dim() != 3:
-        # log_once("warning", "rope_non_tnd_input", "[RoPE] npu_rotary_mul skipped: only TND 3D input is supported in this model")
+    if q.shape[-1] % 2 != 0:
+        log_once("warning", "rope_last_dim_not_even", "[RoPE] npu_rotary_mul skipped: last dim is not even, keep q/k unchanged")
         return q, k
 
-    t, n, d = q.shape
-    if d % 2 != 0:
-        # log_once("warning", "rope_last_dim_not_even", "[RoPE] npu_rotary_mul skipped: last dim is not even, keep q/k unchanged")
-        return q, k
+    def _normalize_coeff_for_tnd(coeff: torch.Tensor, t: int, n: int, d: int) -> Optional[torch.Tensor]:
+        # target preferred layout: T1D
+        if coeff.dim() == 2:
+            if coeff.shape == (t, d):
+                return coeff.unsqueeze(1)
+            return None
 
-    if cos.dim() == 3 and cos.shape[0] == 1 and cos.shape[1] == t and cos.shape[2] == d:
-        cos_npu = cos.squeeze(0).unsqueeze(1)
-    elif cos.dim() == 2 and cos.shape[0] == t and cos.shape[1] == d:
-        cos_npu = cos.unsqueeze(1)
-    elif cos.dim() == 3 and cos.shape[0] == t and cos.shape[1] in (1, n) and cos.shape[2] == d:
-        cos_npu = cos
-    else:
-        # log_once("warning", "rope_bad_cos_layout", f"[RoPE] unsupported cos shape={tuple(cos.shape)} for q={tuple(q.shape)}")
-        return q, k
+        if coeff.dim() == 3:
+            # [1, T, D] -> [T, 1, D]
+            if coeff.shape[0] == 1 and coeff.shape[1] == t and coeff.shape[2] == d:
+                return coeff.squeeze(0).unsqueeze(1)
+            # already [T, 1, D]
+            if coeff.shape[0] == t and coeff.shape[1] == 1 and coeff.shape[2] == d:
+                return coeff
+            # also allow [T, N, D] (TND)
+            if coeff.shape[0] == t and coeff.shape[1] == n and coeff.shape[2] == d:
+                return coeff
 
-    if sin.dim() == 3 and sin.shape[0] == 1 and sin.shape[1] == t and sin.shape[2] == d:
-        sin_npu = sin.squeeze(0).unsqueeze(1)
-    elif sin.dim() == 2 and sin.shape[0] == t and sin.shape[1] == d:
-        sin_npu = sin.unsqueeze(1)
-    elif sin.dim() == 3 and sin.shape[0] == t and sin.shape[1] in (1, n) and sin.shape[2] == d:
-        sin_npu = sin
-    else:
-        # log_once("warning", "rope_bad_sin_layout", f"[RoPE] unsupported sin shape={tuple(sin.shape)} for q={tuple(q.shape)}")
-        return q, k
+        return None
 
-    # log_shape_once("rope_tnd_shape_once", f"[RoPE][shape] TND shapes: q={tuple(q.shape)}, cos={tuple(cos_npu.shape)}, sin={tuple(sin_npu.shape)}")
+    def _normalize_coeff_for_bnsd(coeff: torch.Tensor, b: int, n: int, s: int, d: int) -> Optional[torch.Tensor]:
+        # preferred layout: B1SD or 11SD
+        if coeff.dim() == 3:
+            # [B, S, D] -> [B, 1, S, D]
+            if coeff.shape[0] == b and coeff.shape[1] == s and coeff.shape[2] == d:
+                return coeff.unsqueeze(1)
+            # [1, S, D] -> [1, 1, S, D]
+            if coeff.shape[0] == 1 and coeff.shape[1] == s and coeff.shape[2] == d:
+                return coeff.unsqueeze(1)
+
+        if coeff.dim() == 4:
+            # already [B, 1, S, D] / [1, 1, S, D] / [B, N, S, D]
+            if coeff.shape[-2] == s and coeff.shape[-1] == d:
+                if coeff.shape[0] in (1, b) and coeff.shape[1] in (1, n):
+                    return coeff
+
+        return None
 
     try:
-        cos_npu = cos_npu.to(device=q.device, dtype=q.dtype)
-        sin_npu = sin_npu.to(device=q.device, dtype=q.dtype)
-        q_embed = torch_npu.npu_rotary_mul(q, cos_npu, sin_npu)
-        k_embed = torch_npu.npu_rotary_mul(k, cos_npu, sin_npu)
-        return q_embed, k_embed
+        if q_orig_dim == 3:
+            # TND input path
+            t, n, d = q.shape
+            cos_npu = _normalize_coeff_for_tnd(cos, t, n, d)
+            sin_npu = _normalize_coeff_for_tnd(sin, t, n, d)
+            if cos_npu is None or sin_npu is None:
+                log_once("warning", "rope_unsupported_tnd_coeff_layout", "[RoPE] npu_rotary_mul skipped: unsupported TND cos/sin layout, keep q/k unchanged")
+                return q, k
+
+            cos_npu = cos_npu.to(device=q.device, dtype=q.dtype)
+            sin_npu = sin_npu.to(device=q.device, dtype=q.dtype)
+
+            q_embed = torch_npu.npu_rotary_mul(q, cos_npu, sin_npu, rotary_mode="half")
+            k_embed = torch_npu.npu_rotary_mul(k, cos_npu, sin_npu, rotary_mode="half")
+            return q_embed, k_embed
+
+        if q_orig_dim == 4:
+            # BNSD input path
+            b, n, s, d = q.shape
+            cos_npu = _normalize_coeff_for_bnsd(cos, b, n, s, d)
+            sin_npu = _normalize_coeff_for_bnsd(sin, b, n, s, d)
+            if cos_npu is None or sin_npu is None:
+                log_once("warning", "rope_unsupported_bnsd_coeff_layout", "[RoPE] npu_rotary_mul skipped: unsupported BNSD cos/sin layout, keep q/k unchanged")
+                return q, k
+
+            cos_npu = cos_npu.to(device=q.device, dtype=q.dtype)
+            sin_npu = sin_npu.to(device=q.device, dtype=q.dtype)
+
+            q_embed = torch_npu.npu_rotary_mul(q, cos_npu, sin_npu, rotary_mode="half")
+            k_embed = torch_npu.npu_rotary_mul(k, cos_npu, sin_npu, rotary_mode="half")
+            return q_embed, k_embed
+
+        log_once("warning", "rope_unsupported_q_rank", "[RoPE] npu_rotary_mul skipped: unsupported q rank, keep q/k unchanged")
+        return q, k
+
     except RuntimeError as error:
-        _NPU_ROTARY_TND_AVAILABLE = False
-        # log_once("warning", "rope_runtime_error_disable_npu", f"[RoPE] npu_rotary_mul failed and disabled for this process: {error}; switch to native TND RoPE")
-        return _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim)
+        log_once("warning", "rope_runtime_error", f"[RoPE] npu_rotary_mul failed: {error}; keep q/k unchanged")
+        return q, k
 
     return q, k
 
@@ -291,7 +303,6 @@ class Qwen3Attention:
         config: Qwen3Config,
         layer_idx: Optional[int] = None,
     ):
-        self.layer_idx = layer_idx
         self.num_heads = config.num_attention_heads
         self.head_dim = config.head_dim
         self.num_key_value_heads = config.num_key_value_heads
@@ -349,38 +360,68 @@ class Qwen3Attention:
         # log_separator(f"Qwen3Attention Layer Start")
         # log_tensor_stats("Attention.input_hidden_states", hidden_states, "FlashQwen3.Attention")
         
-        if hidden_states.dim() != 2:
-            raise ValueError(f"[Qwen3Attention] TND required: hidden_states must be 2D [T,H], got {tuple(hidden_states.shape)}")
+        is_tnd = hidden_states.dim() == 2
 
-        input_shape = hidden_states.shape[:-1]
-        q_proj_out = F.linear(hidden_states, self.q_proj_weight)
-        q = self.q_norm.forward(
-            q_proj_out.view(*input_shape, self.num_heads, self.head_dim)
-        )
+        if is_tnd:
+            input_shape = hidden_states.shape[:-1]
+            q_proj_out = F.linear(hidden_states, self.q_proj_weight)
+            q = self.q_norm.forward(
+                q_proj_out.view(*input_shape, self.num_heads, self.head_dim)
+            )
+            # log_tensor_stats("Attention.q_after_q_norm", q, "FlashQwen3.Attention")
 
-        k_proj_out = F.linear(hidden_states, self.k_proj_weight)
-        k = self.k_norm.forward(
-            k_proj_out.view(*input_shape, self.num_key_value_heads, self.head_dim)
-        )
+            k_proj_out = F.linear(hidden_states, self.k_proj_weight)
+            k = self.k_norm.forward(
+                k_proj_out.view(*input_shape, self.num_key_value_heads, self.head_dim)
+            )
+            # log_tensor_stats("Attention.k_after_k_norm", k, "FlashQwen3.Attention")
 
-        v = F.linear(hidden_states, self.v_proj_weight).view(
-            *input_shape, self.num_key_value_heads, self.head_dim
-        )
-
-        cos, sin = position_embeddings
-        if self.layer_idx == 0:
-            log_shape_once(
-                "attn_layer0_tnd_shapes",
-                f"[Attention][shape] layer0 TND shapes: hidden={tuple(hidden_states.shape)}, q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}, cos={tuple(cos.shape)}, sin={tuple(sin.shape)}, max_s={max_s}",
+            v = F.linear(hidden_states, self.v_proj_weight).view(
+                *input_shape, self.num_key_value_heads, self.head_dim
             )
 
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+            cos, sin = position_embeddings
+            if cos.dim() == 3 and cos.shape[0] == 1:
+                cos = cos.squeeze(0)
+                sin = sin.squeeze(0)
+            # log_tensor_stats("Attention.q_before_rope", q, "FlashQwen3.Attention")
+            # log_tensor_stats("Attention.k_before_rope", k, "FlashQwen3.Attention")
+            
+            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+            # log_tensor_stats("Attention.q_after_rope", q, "FlashQwen3.Attention")
+            # log_tensor_stats("Attention.k_after_rope", k, "FlashQwen3.Attention")
 
-        if self.num_key_value_groups > 1:
-            k = k.repeat_interleave(self.num_key_value_groups, dim=1)
-            v = v.repeat_interleave(self.num_key_value_groups, dim=1)
+            if self.num_key_value_groups > 1:
+                k = k.repeat_interleave(self.num_key_value_groups, dim=1)
+                v = v.repeat_interleave(self.num_key_value_groups, dim=1)
 
-        attn_output = torch.empty_like(q)
+            attn_output = torch.empty_like(q)
+        else:
+            input_shape = hidden_states.shape[:-1]
+            hidden_shape_q = (*input_shape, -1, self.head_dim)
+            hidden_shape_kv = (*input_shape, self.num_key_value_heads, self.head_dim)
+
+            q_proj_out = F.linear(hidden_states, self.q_proj_weight)
+            q = self.q_norm.forward(q_proj_out.view(hidden_shape_q)).transpose(1, 2)
+            # log_tensor_stats("Attention.q_after_q_norm", q, "FlashQwen3.Attention")
+
+            k_proj_out = F.linear(hidden_states, self.k_proj_weight)
+            k = self.k_norm.forward(k_proj_out.view(hidden_shape_kv)).transpose(1, 2)
+            # log_tensor_stats("Attention.k_after_k_norm", k, "FlashQwen3.Attention")
+
+            v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape_kv).transpose(1, 2)
+
+            cos, sin = position_embeddings
+
+            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+            # log_tensor_stats("Attention.q_after_rope", q, "FlashQwen3.Attention")
+            # log_tensor_stats("Attention.k_after_rope", k, "FlashQwen3.Attention")
+
+            if self.num_key_value_groups > 1:
+                k = k.repeat_interleave(self.num_key_value_groups, dim=1)
+                v = v.repeat_interleave(self.num_key_value_groups, dim=1)
+
+            attn_output = torch.empty_like(q)
 
         attention(
             q,
@@ -395,7 +436,10 @@ class Qwen3Attention:
             attn_mask=attn_mask,
         )
 
-        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        if is_tnd:
+            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        else:
+            attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
         attn_output = F.linear(attn_output, self.o_proj_weight, bias=None)
         # log_tensor_stats("Attention.attn_output_final", attn_output, "FlashQwen3.Attention")
         # log_separator(f"Qwen3Attention Layer End")
@@ -632,7 +676,7 @@ class FlashQwen3(Model):
     ):
         config = Qwen3Config.from_pretrained(model_path)
 
-        # logger.info(f"Model config: hidden_size={config.hidden_size}, "
+        logger.info(f"Model config: hidden_size={config.hidden_size}, "
             f"intermediate_size={config.intermediate_size}, "
             f"num_layers={config.num_hidden_layers}")
 
@@ -645,19 +689,18 @@ class FlashQwen3(Model):
         index_file = model_path / "model.safetensors.index.json"
         if index_file.exists():
             # 分片模型
-            # logger.info(f"----------------------- FlshQwen3 load 分片模型权重")
+            logger.info(f"----------------------- FlshQwen3 load 分片模型权重")
             with open(index_file, "r") as f:
                 index_data = json.load(f)
             weight_map = index_data["weight_map"]
         else:
             # 单文件模型
-            # logger.info(f"----------------------- FlshQwen3 load 单文件模型")
+            logger.info(f"----------------------- FlshQwen3 load 单文件模型")
             weight_map = None
 
         model = FlashQwen3Model(model_path, weight_map, device, dtype, config)
         self.hidden_size = config.hidden_size
         self.pooling = DefaultPooling(self.hidden_size, pooling_mode=pool)
-        self.pool_mode = getattr(getattr(self.pooling, "pooling", None), "pooling_mode", "last")
         self.device = device
         self.dtype = dtype
 
@@ -673,7 +716,62 @@ class FlashQwen3(Model):
         # 注释掉性能开销大的日志
         # log_separator("FlashQwen3.embed Start")
         
-        if isinstance(batch, FlashBatch):
+        if isinstance(batch, PaddedBatch):
+            # log_separator("Processing PaddedBatch")
+            # log_tensor_stats("Embed.position_ids", batch.position_ids, "FlashQwen3.Embed")
+            
+            input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+            max_input_lens = int(input_lens.max().item())
+            cu_seqlens = torch.cat(
+                (input_lens.new_tensor([0]), input_lens.cumsum(-1).int())
+            )
+            # log_tensor_stats("Embed.cu_seqlens", cu_seqlens, "FlashQwen3.Embed")
+            
+            mask = batch.attention_mask.bool()
+            _, tgt_len = mask.size()
+            attn_mask = _generate_attn_mask(tgt_len, self.dtype).unsqueeze(0).unsqueeze(0)
+            
+            pooling_attention_mask = batch.attention_mask
+            
+            output = self.model.forward(
+                input_ids=batch.input_ids,
+                position_ids=batch.position_ids,
+                cu_seqlens=cu_seqlens,
+                max_s=max_input_lens,
+                mask=mask,
+                attn_mask=attn_mask,
+            )
+
+            # 增加模块来查看npu每个时刻在计算哪个算子
+            # experimental_config = torch_npu.profiler._ExperimentalConfig(profiler_level=torch_npu.profiler.ProfilerLevel.Level2)
+            # with torch_npu.profiler.profile(
+            #         with_stack=False,  # 采集torch 算子的函数调用栈的开关，该参数选填，默认关闭
+            #         record_shapes=False,  # 采集torch 算子的input shape和input type的开关，该参数选填，默认关闭
+            #         profile_memory=False,  # 采集memory相关数据的开关，该参数选填，默认关闭
+            #         schedule=torch_npu.profiler.schedule(wait=0, active=1),  # warmup默认为0，老版本torch_npu包该参数为必填项
+            #         experimental_config=experimental_config,  # 该参数选填，默认为Level0
+            #         on_trace_ready=torch_npu.profiler.tensorboard_trace_handler("/tmp/profiling")
+            #         # 导出tensorboard可呈现的数据形式，可指定worker_name，默认为：{host名称}_{进程id}
+            # ) as prof:
+            #     with torch.no_grad():
+            #         # output = self.model(**kwargs)
+            #         output = self.model.forward(
+            #         input_ids=batch.input_ids,
+            #         position_ids=batch.position_ids,
+            #         cu_seqlens=cu_seqlens,
+            #         max_s=max_input_lens,
+            #         mask=mask,
+            #         attn_mask=attn_mask,
+            #         )
+            #     prof.step()
+            
+            hidden_states = output.last_hidden_state
+            
+            if hidden_states.dim() == 2:
+                hidden_states = hidden_states.unsqueeze(1)
+            output = BaseModelOutputWithPast(last_hidden_state=hidden_states)
+            
+        elif isinstance(batch, FlashBatch):
             # log_separator("Processing FlashBatch")
             # log_tensor_stats("Embed.cu_seqlens", batch.cu_seqlens, "FlashQwen3.Embed")
 
@@ -687,19 +785,13 @@ class FlashQwen3(Model):
             if position_ids.dim() == 2:
                 position_ids = position_ids.reshape(-1)
 
-            if input_ids.dim() != 1 or position_ids.dim() != 1:
-                raise ValueError(
-                    f"[FlashQwen3.embed] TND required: input_ids/position_ids must be 1D after flatten, got input_ids={tuple(input_ids.shape)}, position_ids={tuple(position_ids.shape)}"
-                )
-
-            # log_shape_once(
-                "embed_tnd_input_shapes",
-                f"[Embed][shape] FlashBatch shapes: input_ids={tuple(input_ids.shape)}, position_ids={tuple(position_ids.shape)}, cu_seqlens={tuple(cu_seqlens.shape)}, max_s={batch.max_s}, pool={self.pool_mode}",
-            )
-
             mask = None
             attn_mask = None
             max_input_lens = batch.max_s
+            
+            seq_lens = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
+            seq_lens = [int(s) for s in seq_lens]
+            # logger.info(f"[FlashQwen3.Embed] seq_lens={seq_lens}, max_s={max_input_lens}")
             
             output = self.model.forward(
                 input_ids=input_ids,
@@ -711,43 +803,26 @@ class FlashQwen3(Model):
             )
             
             hidden_states = output.last_hidden_state
-
-            seq_lens_tensor = cu_seqlens[1:] - cu_seqlens[:-1]
-            if self.pool_mode in ("last", "last_token") and torch.all(seq_lens_tensor > 0):
-                last_indices = (cu_seqlens[1:] - 1).to(device=hidden_states.device, dtype=torch.long)
-                embedding = hidden_states.index_select(0, last_indices)
-                cpu_results = embedding.view(-1).tolist()
-                return [
-                    Embedding(
-                        values=cpu_results[i * self.hidden_size : (i + 1) * self.hidden_size]
-                    )
-                    for i in range(len(batch))
-                ]
-
+            
             batch_hidden_states = torch.zeros(
                 (batch.size, batch.max_s, self.hidden_size),
                 dtype=hidden_states.dtype,
-                device=hidden_states.device,
+                device=hidden_states.device
             )
-
+            
             pooling_attention_mask = torch.zeros(
                 (batch.size, batch.max_s),
                 dtype=torch.long,
-                device=self.device,
+                device=self.device
             )
-
+            
             offset = 0
-            seq_lens = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
             for i, seq_len in enumerate(seq_lens):
                 batch_hidden_states[i, :seq_len, :] = hidden_states[offset:offset + seq_len, :]
                 pooling_attention_mask[i, :seq_len] = 1
                 offset += seq_len
-
+            
             output = BaseModelOutputWithPast(last_hidden_state=batch_hidden_states)
-        else:
-            raise TypeError(
-                f"[FlashQwen3.embed] FlashBatch(TND) is required on NPU, got {type(batch).__name__}"
-            )
 
         # log_separator("Pooling Start")
         embedding = self.pooling.forward(output, pooling_attention_mask)

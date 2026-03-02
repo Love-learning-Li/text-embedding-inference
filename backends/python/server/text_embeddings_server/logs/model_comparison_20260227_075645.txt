@@ -14,7 +14,7 @@
 2026-02-27 07:56:53.272 | INFO     | __main__:test_flash_qwen3_model:58 - Input IDs shape: torch.Size([1, 8])
 2026-02-27 07:56:53.272 | INFO     | __main__:test_flash_qwen3_model:59 - Input IDs: [[785, 6722, 315, 5616, 374, 26549, 13, 151643]]
 2026-02-27 07:56:53.272 | INFO     | __main__:test_flash_qwen3_model:60 - Attention mask: [[1, 1, 1, 1, 1, 1, 1, 1]]
-2026-02-27 07:56:53.272 | INFO     | __main__:test_flash_qwen3_model:61 - Position IDs: [[0, 1, 2, 3, 4, 5, 6, 7]]
+2026-02-27 07:56:53.272 | INFO     | __main__:test_flash_qwen3_model:61 - Position IDs: [[0, 1, 2, 3, 4, 5, 6, 7], ]
 2026-02-27 07:56:53.275 | INFO     | text_embeddings_server.models.flash_qwen3:__init__:527 - Model config: hidden_size=1024, intermediate_size=3072, num_layers=28
 2026-02-27 07:56:53.276 | INFO     | text_embeddings_server.models.flash_qwen3:__init__:546 - ----------------------- FlshQwen3 load 单文件模型
 2026-02-27 07:56:56.845 | INFO     | text_embeddings_server.models.flash_qwen3:log_separator:43 - [2026-02-27 07:56:56.845] [FlashQwen3] ==================== FlashQwen3.embed Start ====================
