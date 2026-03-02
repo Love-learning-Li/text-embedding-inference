@@ -47,18 +47,22 @@ def test_flash_qwen3_model(model_path: str, input_text: str, device: torch.devic
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True)
     
-    input_ids = inputs["input_ids"].to(device)
+    input_ids_2d = inputs["input_ids"].to(device)
     attention_mask = inputs["attention_mask"].to(device)
-    
-    seq_len = input_ids.shape[1]
-    position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
-    cu_seqlens = torch.tensor([0, seq_len], device=device, dtype=torch.int32)
+
+    seq_len = input_ids_2d.shape[1]
+    # FlashBatch/TND expects flattened token stream: [total_tokens]
+    input_ids = input_ids_2d.reshape(-1)
+    position_ids = torch.arange(seq_len, device=device, dtype=torch.int32)
+    # Keep cu_seqlens on CPU to match TEI FlashBatch convention
+    cu_seqlens = torch.tensor([0, seq_len], device="cpu", dtype=torch.int32)
     
     logger.info(f"Input text: '{input_text}'")
-    logger.info(f"Input IDs shape: {input_ids.shape}")
-    logger.info(f"Input IDs: {input_ids.tolist()}")
+    logger.info(f"Input IDs shape (2D): {input_ids_2d.shape}")
+    logger.info(f"Input IDs: {input_ids_2d.tolist()}")
     logger.info(f"Attention mask: {attention_mask.tolist()}")
-    logger.info(f"Position IDs: {position_ids.tolist()}")
+    logger.info(f"Position IDs (TND): {position_ids.tolist()}")
+    logger.info(f"cu_seqlens (CPU): {cu_seqlens.tolist()}")
     
     model = FlashQwen3(
         model_path=Path(model_path),

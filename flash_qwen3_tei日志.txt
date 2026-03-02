@@ -1,0 +1,58 @@
+root@example:HwHiAiUser# bash start.sh Qwen3-Embedding-0.6B 10.44.124.218 2626
+Model '/home/HwHiAiUser/model/Qwen3-Embedding-0.6B' exists.
+run on device 0
+Starting TEI service on 10.44.124.218:2626...
+2026-02-28T15:01:57.016587Z  INFO text_embeddings_router: router/src/main.rs:203: Args { model_id: "Qwe**-*********-0.6B", revision: None, tokenization_workers: None, dtype: None, pooling: None, max_concurrent_requests: 64, max_batch_tokens: 16384, max_batch_requests: None, max_client_batch_size: 32, auto_truncate: true, default_prompt_name: None, default_prompt: None, dense_path: None, hf_api_token: None, hf_token: None, hostname: "10.44.124.218", port: 2626, uds_path: "/tmp/text-embeddings-inference-server", huggingface_hub_cache: None, payload_limit: 2000000, api_key: None, json_output: false, disable_spans: false, otlp_endpoint: None, otlp_service_name: "text-embeddings-inference.server", prometheus_port: 9091, cors_allow_origin: None }
+2026-02-28T15:01:57.523280Z  WARN text_embeddings_router: router/src/lib.rs:210: Could not find a Sentence Transformers config
+2026-02-28T15:01:57.523312Z  WARN text_embeddings_router: router/src/lib.rs:224: The input sequences will be truncated to 16384 tokens even if the model `max_input_length` is greater than the provided `--max-batch-tokens` (32768 > 16384), as `--auto-truncate` is enabled.
+2026-02-28T15:01:57.523322Z  INFO text_embeddings_router: router/src/lib.rs:235: Maximum number of tokens per request: 16384
+2026-02-28T15:01:57.523635Z  INFO text_embeddings_core::tokenization: core/src/tokenization.rs:38: Starting 256 tokenization workers
+2026-02-28T15:02:10.022023Z  INFO text_embeddings_router: router/src/lib.rs:283: Starting model backend
+2026-02-28T15:02:10.023269Z  INFO text_embeddings_backend_python::management: backends/python/src/management.rs:68: Starting Python backend
+2026-02-28T15:02:14.468985Z  WARN python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:39: Could not import Flash Attention enabled models: No module named 'text_embeddings_server.models.flash_roberta'
+
+2026-02-28T15:02:20.119637Z  INFO text_embeddings_backend_python::management: backends/python/src/management.rs:132: Waiting for Python backend to be ready...
+2026-02-28T15:02:20.535585Z  INFO python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:37: __init__.py -> get device -> backend device: npu npu
+
+2026-02-28T15:02:20.538971Z  INFO python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:37: ----------------------- use npu in my modified flash qwen3 model
+
+2026-02-28T15:02:20.540292Z  INFO python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:37: Model config: hidden_size=1024, intermediate_size=3072, num_layers=28
+
+2026-02-28T15:02:20.540515Z  INFO python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:37: ----------------------- FlshQwen3 load 单文件模型
+
+2026-02-28T15:02:24.587935Z  INFO python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:37: Server started at unix:///tmp/text-embeddings-inference-server
+
+2026-02-28T15:02:24.589244Z  INFO text_embeddings_backend_python::management: backends/python/src/management.rs:129: Python backend ready in 14.47434992s
+2026-02-28T15:02:24.595011Z  WARN python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:39: [Embed][shape] FlashBatch shapes: input_ids=(1,), position_ids=(1,), cu_seqlens=(2,), max_s=1, pool=last
+
+2026-02-28T15:02:25.574665Z  WARN python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:39: [Attention][shape] layer0 TND shapes: hidden=(1, 1024), q=(1, 16, 128), k=(1, 8, 128), v=(1, 8, 128), cos=(1, 1, 128), sin=(1, 1, 128), max_s=1
+
+2026-02-28T15:02:25.574823Z  WARN python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:39: [RoPE][shape] TND shapes: q=(1, 16, 128), cos=(1, 1, 128), sin=(1, 1, 128)
+
+2026-02-28T15:02:26.712292Z  WARN python-backend: text_embeddings_backend_python::logging: backends/python/src/logging.rs:39: [RoPE] npu_rotary_mul failed and disabled for this process: InnerRun:build/CMakeFiles/torch_npu.dir/compiler_depend.ts:200 OPS function error: RotaryMul, error code is 500002
+[ERROR] 2026-02-28-15:02:26 (PID:129602, Device:0, RankID:-1) ERR01100 OPS call acl api failed
+[Error]: A GE error occurs in the system.
+        Rectify the fault based on the error information in the ascend log.
+EZ9999: Inner Error!
+EZ9999[PID: 129602] 2026-02-28-15:02:26.705.737 (EZ9999):  Head dim must be aligned and shape must be 4.[FUNC:RotaryMulTiling][FILE:rotary_mul.cc][LINE:290]
+        TraceBack (most recent call last):
+       [Exec][Op]Execute op failed. op type = RotaryMul, ge result = 4294967295[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:162]
+; switch to native TND RoPE
+
+2026-02-28T15:02:27.194897Z  INFO text_embeddings_router: router/src/lib.rs:302: Warming up model
+2026-02-28T15:02:27.377081Z  INFO text_embeddings_router::http::server: router/src/http/server.rs:2064: Starting HTTP server: 10.44.124.218:2626
+2026-02-28T15:02:27.377108Z  INFO text_embeddings_router::http::server: router/src/http/server.rs:2065: Ready
+
+
+
+
+2026-02-28T15:04:49.558664Z  INFO batching_task:next_batch: text_embeddings_core::queue: core/src/queue.rs:188: inference batch size is:1
+2026-02-28T15:04:49.724730Z  INFO openai_embed{total_time="166.61759ms" tokenization_time="458.43µs" queue_time="434.04µs" inference_time="165.61454ms"}: text_embeddings_router::http::server: router/src/http/server.rs:1290: Success
+2026-02-28T15:04:50.535044Z  INFO batching_task:next_batch: text_embeddings_core::queue: core/src/queue.rs:188: inference batch size is:1
+2026-02-28T15:04:50.699294Z  INFO openai_embed{total_time="164.56592ms" tokenization_time="269.84µs" queue_time="241.08µs" inference_time="163.97725ms"}: text_embeddings_router::http::server: router/src/http/server.rs:1290: Success
+2026-02-28T15:04:51.537123Z  INFO batching_task:next_batch: text_embeddings_core::queue: core/src/queue.rs:188: inference batch size is:1
+2026-02-28T15:04:51.701343Z  INFO openai_embed{total_time="164.51968ms" tokenization_time="259.58µs" queue_time="259.81µs" inference_time="163.91678ms"}: text_embeddings_router::http::server: router/src/http/server.rs:1290: Success
+2026-02-28T15:04:52.383401Z  INFO batching_task:next_batch: text_embeddings_core::queue: core/src/queue.rs:188: inference batch size is:1
+2026-02-28T15:04:52.551745Z  INFO openai_embed{total_time="168.73092ms" tokenization_time="348.75µs" queue_time="217.87µs" inference_time="168.09142ms"}: text_embeddings_router::http::server: router/src/http/server.rs:1290: Success
+2026-02-28T15:04:53.334153Z  INFO batching_task:next_batch: text_embeddings_core::queue: core/src/queue.rs:188: inference batch size is:1
+2026-02-28T15:04:53.495421Z  INFO openai_embed{total_time="161.62339ms" tokenization_time="320.34µs" queue_time="239.55µs" inference_time="160.99545ms"}: text_embeddings_router::http::server: router/src/http/server.rs:1290: Success

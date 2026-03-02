@@ -58,9 +58,6 @@ class LastTokenPooling(_Pooling):
         token_embeddings = model_output[0]
         attention_mask = attention_mask.to(dtype=torch.bool)
         
-        batch_size = token_embeddings.shape[0]
-        seq_length = token_embeddings.shape[1]
-        
         last_indices = attention_mask.sum(dim=1, keepdim=True) - 1
         last_indices = last_indices.clamp(min=0)
         

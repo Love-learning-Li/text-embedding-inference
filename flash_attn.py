@@ -12,6 +12,8 @@ if os.getenv("USE_FLASH_ATTENTION", "").lower() == "false":
 HAS_FLASH_ATTN = False
 HAS_FLASH_ATTN_V2 = False
 NPU_COMPRESSED_MASK_SIZE = 2048
+_NPU_COMPRESSED_MASK_CACHE = {}
+_NPU_WARN_ONCE_KEYS = set()
 
 is_hpu = is_hpu()
 use_ipex = use_ipex()
@@ -64,7 +66,7 @@ else:
 
 
 def hpu_attn(
-    q,
+    #q,
     k,
     v,
     out,
@@ -93,7 +95,12 @@ def hpu_attn(
 
 
 def _get_npu_compressed_causal_mask(device: torch.device) -> torch.Tensor:
-    return torch.triu(
+    device_key = f"{device.type}:{device.index}"
+    cached = _NPU_COMPRESSED_MASK_CACHE.get(device_key)
+    if cached is not None:
+        return cached
+
+    mask = torch.triu(
         torch.ones(
             (NPU_COMPRESSED_MASK_SIZE, NPU_COMPRESSED_MASK_SIZE),
             dtype=torch.bool,
@@ -101,6 +108,15 @@ def _get_npu_compressed_causal_mask(device: torch.device) -> torch.Tensor:
         ),
         diagonal=1,
     )
+    _NPU_COMPRESSED_MASK_CACHE[device_key] = mask
+    return mask
+
+
+def _npu_warn_once(key: str, message: str):
+    if key in _NPU_WARN_ONCE_KEYS:
+        return
+    _NPU_WARN_ONCE_KEYS.add(key)
+    logger.warning(message)
 
 
 def _eager_varlen_tnd_attn(
@@ -151,56 +167,27 @@ def npu_attn(
     softmax_scale,
     is_causal=False,
     ):
-    # npu_fusion_attention for FlashBatch
-    # Handle 4D input [batch, seq, heads, dim] -> convert to 3D [total_seq, heads, dim]
-    
-    # logger.info(f"[NPU Attention] Input shapes - q: {q.shape}, k: {k.shape}, v: {v.shape}")
-    # logger.info(f"[NPU Attention] num_heads: {num_heads}, scale: {softmax_scale}")
-    # logger.info(f"[NPU Attention] seqlen_q: {seqlen_q}, seqlen_k: {seqlen_k}")
-    # logger.info(f"[NPU Attention] max_seqlen_q: {max_seqlen_q}, is_causal: {is_causal}")
-    
-    orig_q_shape = q.shape
-    orig_is_4d = q.dim() == 4
-    input_was_bhsd = False
-
-    # Convert 4D to 3D if needed
-    if q.dim() == 4:
-        # Normalize to BSND before flattening.
-        # Some callers may pass BHSD.
-        if q.shape[1] == num_heads and q.shape[2] != num_heads:
-            q = q.transpose(1, 2).contiguous()
-            k = k.transpose(1, 2).contiguous()
-            v = v.transpose(1, 2).contiguous()
-            input_was_bhsd = True
-
-        batch_size, seq_len, heads, head_dim = q.shape
-        q = q.reshape(batch_size * seq_len, heads, head_dim)
-        k = k.reshape(batch_size * seq_len, heads, head_dim)
-        
-        # v might already be 3D [batch, heads, dim] or 4D [batch, seq, heads, dim]
-        if v.dim() == 4:
-            v = v.reshape(batch_size * seq_len, heads, head_dim)
-        
-        # logger.info(f"[NPU Attention] Reshaped to 3D - q: {q.shape}, k: {k.shape}, v: {v.shape}")
-    elif v.dim() == 3 and q.dim() == 3:
-        # Both q, k, v are already 3D, ensure they're in TND format [total_seq, heads, dim]
-        # logger.info(f"[NPU Attention] Already 3D - q: {q.shape}, k: {k.shape}, v: {v.shape}")
-        pass
+    if q.dim() != 3 or k.dim() != 3 or v.dim() != 3:
+        raise ValueError(
+            f"[NPU Attention] Strict TND is required: q/k/v must be 3D [T,N,D], got q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}"
+        )
     
     sparse_mode = 3 if is_causal else 0
 
     # npu_fusion_attention expects cumulative lengths without the leading 0.
     if isinstance(seqlen_q, torch.Tensor):
-        seqlen_q_list = seqlen_q.tolist()
+        seq_q_tensor = seqlen_q[1:] if seqlen_q.numel() > 0 and int(seqlen_q[0]) == 0 else seqlen_q
+        actual_seq_qlen = seq_q_tensor.tolist()
     else:
-        seqlen_q_list = list(seqlen_q)
-    if isinstance(seqlen_k, torch.Tensor):
-        seqlen_k_list = seqlen_k.tolist()
-    else:
-        seqlen_k_list = list(seqlen_k)
+        seq_q_list = list(seqlen_q)
+        actual_seq_qlen = seq_q_list[1:] if len(seq_q_list) > 0 and seq_q_list[0] == 0 else seq_q_list
 
-    actual_seq_qlen = seqlen_q_list[1:] if len(seqlen_q_list) > 0 and seqlen_q_list[0] == 0 else seqlen_q_list
-    actual_seq_kvlen = seqlen_k_list[1:] if len(seqlen_k_list) > 0 and seqlen_k_list[0] == 0 else seqlen_k_list
+    if isinstance(seqlen_k, torch.Tensor):
+        seq_k_tensor = seqlen_k[1:] if seqlen_k.numel() > 0 and int(seqlen_k[0]) == 0 else seqlen_k
+        actual_seq_kvlen = seq_k_tensor.tolist()
+    else:
+        seq_k_list = list(seqlen_k)
+        actual_seq_kvlen = seq_k_list[1:] if len(seq_k_list) > 0 and seq_k_list[0] == 0 else seq_k_list
 
     npu_attn_mask = attn_mask
     if npu_attn_mask is not None:
@@ -229,65 +216,20 @@ def npu_attn(
             pre_tockens=pre_tockens,
             next_tockens=next_tockens,
         )[0]
-        if orig_is_4d:
-            out_view = out_.view(orig_q_shape[0], orig_q_shape[2] if input_was_bhsd else orig_q_shape[1], num_heads, out_.shape[-1])
-            if input_was_bhsd:
-                out_view = out_view.transpose(1, 2).contiguous()
-            out.copy_(out_view)
-        else:
-            out.copy_(out_)
-        # logger.info(f"[NPU Attention] TND format succeeded, output shape: {out_.shape}")
+        out.copy_(out_)
         return out
     except RuntimeError as e:
-        logger.warning(f"[NPU Attention] TND format failed: {e}")
-        
-        # Fallback to BSND format: [batch, seq, heads, dim]
-        try:
-            q_bsnd = q.unsqueeze(0)
-            k_bsnd = k.unsqueeze(0)
-            v_bsnd = v.unsqueeze(0)
-            
-            out_ = torch_npu.npu_fusion_attention(
-                query=q_bsnd,
-                key=k_bsnd,
-                value=v_bsnd,
-                head_num=num_heads,
-                input_layout="BSND",
-                scale=softmax_scale,
-                sparse_mode=sparse_mode,
-                atten_mask=npu_attn_mask,
-                pre_tockens=pre_tockens,
-                next_tockens=next_tockens,
-            )[0]
-            out_bsnd = out_.squeeze(0)
-            if orig_is_4d:
-                if input_was_bhsd:
-                    out.copy_(out_bsnd.transpose(1, 2).contiguous())
-                else:
-                    out.copy_(out_bsnd)
-            else:
-                out.copy_(out_bsnd)
-            logger.info(f"[NPU Attention] BSND format succeeded, output shape: {out.shape}")
-            return out
-        except RuntimeError as e2:
-            logger.warning(f"[NPU Attention] BSND format also failed: {e2}")
-            logger.warning("[NPU Attention] Falling back to eager varlen attention on NPU")
-            out_eager = _eager_varlen_tnd_attn(
-                q=q,
-                k=k,
-                v=v,
-                actual_seq_qlen=actual_seq_qlen,
-                softmax_scale=softmax_scale,
-                is_causal=is_causal,
-            )
-            if orig_is_4d:
-                out_view = out_eager.view(orig_q_shape[0], orig_q_shape[2] if input_was_bhsd else orig_q_shape[1], num_heads, out_eager.shape[-1])
-                if input_was_bhsd:
-                    out_view = out_view.transpose(1, 2).contiguous()
-                out.copy_(out_view)
-            else:
-                out.copy_(out_eager)
-            return out
+        _npu_warn_once("npu_tnd_fallback_eager", f"[NPU Attention] TND fusion failed once: {e}; fallback to eager varlen attention")
+        out_eager = _eager_varlen_tnd_attn(
+            q=q,
+            k=k,
+            v=v,
+            actual_seq_qlen=actual_seq_qlen,
+            softmax_scale=softmax_scale,
+            is_causal=is_causal,
+        )
+        out.copy_(out_eager)
+        return out
 
 
 def attention(
