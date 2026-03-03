@@ -159,11 +159,10 @@ def _apply_rotary_pos_emb_native(q, k, cos, sin, unsqueeze_dim=1):
 def _apply_rotary_pos_emb_npu_rotary(q, k, cos, sin, unsqueeze_dim=1):
     """
     Implementation using torch_npu.npu_rotary_mul.
-    Requires 4D input in BNSD format for jit_compile=True scenario.
-    
-    Note: This implementation has performance overhead due to:
-    1. Dimension conversion (TND -> BNSD -> TND)
-    2. Layout constraints requiring specific cos/sin shapes
+    For TND input, convert to 4D BNSD to satisfy RotaryMul constraints:
+    - q/k: [T, N, D] -> [1, N, T, D]
+    - cos/sin: [T, 1, D] -> [1, 1, T, D]
+    Then convert outputs back to TND.
     """
     global _NPU_ROTARY_TND_AVAILABLE
 
@@ -179,34 +178,49 @@ def _apply_rotary_pos_emb_npu_rotary(q, k, cos, sin, unsqueeze_dim=1):
         log_once("warning", "rope_last_dim_not_even", "[RoPE] npu_rotary_mul skipped: last dim is not even, keep q/k unchanged")
         return q, k
 
-    if cos.dim() == 3 and cos.shape[0] == 1 and cos.shape[1] == t and cos.shape[2] == d:
-        cos_npu = cos.squeeze(0).unsqueeze(1)
-    elif cos.dim() == 2 and cos.shape[0] == t and cos.shape[1] == d:
-        cos_npu = cos.unsqueeze(1)
-    elif cos.dim() == 3 and cos.shape[0] == t and cos.shape[1] in (1, n) and cos.shape[2] == d:
-        cos_npu = cos
-    else:
+    def _normalize_coeff_for_bnsd(coeff: torch.Tensor) -> Optional[torch.Tensor]:
+        if coeff.dim() == 3 and coeff.shape[0] == 1 and coeff.shape[1] == t and coeff.shape[2] == d:
+            coeff_t1d = coeff.squeeze(0).unsqueeze(1)
+        elif coeff.dim() == 2 and coeff.shape[0] == t and coeff.shape[1] == d:
+            coeff_t1d = coeff.unsqueeze(1)
+        elif coeff.dim() == 3 and coeff.shape[0] == t and coeff.shape[1] == 1 and coeff.shape[2] == d:
+            coeff_t1d = coeff
+        else:
+            return None
+
+        # [T, 1, D] -> [1, 1, T, D] for BNSD input
+        return coeff_t1d.permute(1, 0, 2).unsqueeze(0).contiguous()
+
+    cos_bnsd = _normalize_coeff_for_bnsd(cos)
+    sin_bnsd = _normalize_coeff_for_bnsd(sin)
+
+    if cos_bnsd is None:
         log_once("warning", "rope_bad_cos_layout", f"[RoPE] unsupported cos shape={tuple(cos.shape)} for q={tuple(q.shape)}")
         return q, k
-
-    if sin.dim() == 3 and sin.shape[0] == 1 and sin.shape[1] == t and sin.shape[2] == d:
-        sin_npu = sin.squeeze(0).unsqueeze(1)
-    elif sin.dim() == 2 and sin.shape[0] == t and sin.shape[1] == d:
-        sin_npu = sin.unsqueeze(1)
-    elif sin.dim() == 3 and sin.shape[0] == t and sin.shape[1] in (1, n) and sin.shape[2] == d:
-        sin_npu = sin
-    else:
+    if sin_bnsd is None:
         log_once("warning", "rope_bad_sin_layout", f"[RoPE] unsupported sin shape={tuple(sin.shape)} for q={tuple(q.shape)}")
         return q, k
 
-    log_shape_once("rope_tnd_shape_once", f"[RoPE][shape] TND shapes: q={tuple(q.shape)}, cos={tuple(cos_npu.shape)}, sin={tuple(sin_npu.shape)}")
+    q_bnsd = q.permute(1, 0, 2).unsqueeze(0).contiguous()
+    k_bnsd = k.permute(1, 0, 2).unsqueeze(0).contiguous()
+
+    log_shape_once(
+        "rope_tnd_to_bnsd_shape_once",
+        f"[RoPE][shape] TND->BNSD: q={tuple(q.shape)}->{tuple(q_bnsd.shape)}, k={tuple(k.shape)}->{tuple(k_bnsd.shape)}, cos={tuple(cos.shape)}->{tuple(cos_bnsd.shape)}, sin={tuple(sin.shape)}->{tuple(sin_bnsd.shape)}",
+    )
 
     try:
-        cos_npu = cos_npu.to(device=q.device, dtype=q.dtype)
-        sin_npu = sin_npu.to(device=q.device, dtype=q.dtype)
-        q_embed = torch_npu.npu_rotary_mul(q, cos_npu, sin_npu)
-        k_embed = torch_npu.npu_rotary_mul(k, cos_npu, sin_npu)
-        log_once("#####", "use npu_rotary mul achieve RoPE",  "_apply_rotary_pos_emb_npu_rotary")
+        q_bnsd = q_bnsd.to(device=q.device, dtype=q.dtype)
+        k_bnsd = k_bnsd.to(device=k.device, dtype=k.dtype)
+        cos_bnsd = cos_bnsd.to(device=q.device, dtype=q.dtype)
+        sin_bnsd = sin_bnsd.to(device=q.device, dtype=q.dtype)
+
+        q_embed_bnsd = torch_npu.npu_rotary_mul(q_bnsd, cos_bnsd, sin_bnsd)
+        k_embed_bnsd = torch_npu.npu_rotary_mul(k_bnsd, cos_bnsd, sin_bnsd)
+
+        q_embed = q_embed_bnsd.squeeze(0).permute(1, 0, 2).contiguous()
+        k_embed = k_embed_bnsd.squeeze(0).permute(1, 0, 2).contiguous()
+        log_once("info", "use_npu_rotary_mul_once", "_apply_rotary_pos_emb_npu_rotary")
         return q_embed, k_embed
     except RuntimeError as error:
         _NPU_ROTARY_TND_AVAILABLE = False
