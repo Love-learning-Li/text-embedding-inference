@@ -146,8 +146,8 @@ def apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1):
     # cos, sin: [1, seq_len, 1, head_dim]
     cos = cos.reshape(1, -1, 1, head_dim)
     sin = sin.reshape(1, -1, 1, head_dim)
-    logger.info(f"ttttttttttttttttttttttttt cos.shape:{cos.shape}, sin.shape:{sin.shape}")
-    logger.info(f"ttttttttttttttttttttttttt q_.shape:{q_.shape}, k_.shape:{k_.shape}")
+    # logger.info(f"ttttttttttttttttttttttttt cos.shape:{cos.shape}, sin.shape:{sin.shape}")
+    # logger.info(f"ttttttttttttttttttttttttt q_.shape:{q_.shape}, k_.shape:{k_.shape}")
     output_q = torch_npu.npu_rotary_mul(q_, cos, sin)
     output_k = torch_npu.npu_rotary_mul(k_, cos, sin)
 
@@ -330,11 +330,11 @@ class Qwen3Attention:
         )
         v = F.linear(hidden_states, self.v_proj_weight).view(*input_shape, self.num_key_value_heads, self.head_dim)
         cos, sin = position_embeddings
-        if self.layer_idx == 0:
-            logger.info(f"xxxxxxxxxxxxxxxxxxx q_origin.shape: {q.shape}")
-            logger.info(f"xxxxxxxxxxxxxxxxxxx k_origin.shape: {k.shape}")
-            logger.info(f"xxxxxxxxxxxxxxxxxxx cos.shape: {cos.shape}")
-            logger.info(f"xxxxxxxxxxxxxxxxxxx sin.shape: {sin.shape}")
+        # if self.layer_idx == 0:
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx q_origin.shape: {q.shape}")
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx k_origin.shape: {k.shape}")
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx cos.shape: {cos.shape}")
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx sin.shape: {sin.shape}")
         q, k = apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1)
 
         if self.num_key_value_groups > 1:
@@ -345,10 +345,10 @@ class Qwen3Attention:
         # k= k.view(-1, self.num_heads, self.head_dim)
         # v= v.view(-1, self.num_heads, self.head_dim)
         # attn_output = attn_output.view(-1, self.num_heads, self.head_dim)
-        if self.layer_idx == 0:
-            logger.info(f"xxxxxxxxxxxxxxxxxxx q: {q.shape}")
-            logger.info(f"xxxxxxxxxxxxxxxxxxx k: {k.shape}")
-            logger.info(f"xxxxxxxxxxxxxxxxxxx v: {v.shape}")
+        # if self.layer_idx == 0:
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx q: {q.shape}")
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx k: {k.shape}")
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx v: {v.shape}")
         attn_output = torch.empty_like(q)
         attention(
             q,
@@ -362,9 +362,9 @@ class Qwen3Attention:
             is_causal=True,
             attn_mask=attn_mask,
         )
-        if self.layer_idx == 0:
-            logger.info(f"xxxxxxxxxxxxxxxxxxx attn_output.shape: {attn_output.shape}")
-            logger.info(f"xxxxxxxxxxxxxxxxxxx attn_output: {attn_output}")
+        # if self.layer_idx == 0:
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx attn_output.shape: {attn_output.shape}")
+        #     logger.info(f"xxxxxxxxxxxxxxxxxxx attn_output: {attn_output}")
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = F.linear(attn_output, self.o_proj_weight, bias=None)
 
@@ -548,7 +548,7 @@ class FlashQwen3Model:
     ):
         inputs_embeds = nn.functional.embedding(input_ids, self.word_embeddings_weight)
         hidden_states = inputs_embeds
-        logger.info(f"xxxxxxxxxxxxxxxxxxx position_ids: {position_ids}")
+        # logger.info(f"xxxxxxxxxxxxxxxxxxx position_ids: {position_ids}")
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         for layer in self.layers:
             hidden_states = layer.forward(
@@ -598,7 +598,7 @@ class FlashQwen3(Model):
     @tracer.start_as_current_span("embed")
     def embed(self, batch: Union[FlashBatch, PaddedBatch]) -> List[Embedding]:
         if isinstance(batch, PaddedBatch):
-            logger.info(f"xxxxxxxxxxxxxxxxxxx input_ids.shape: {batch.input_ids.shape}")
+            # logger.info(f"xxxxxxxxxxxxxxxxxxx input_ids.shape: {batch.input_ids.shape}")
             input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
             max_input_lens = 0
             cu_seqlens = torch.cat(
@@ -637,11 +637,11 @@ class FlashQwen3(Model):
         
         last_token_indices = cu_seqlens[1:] - 1
         hidden_states = output.last_hidden_state.cpu()
-        logger.info(f"xxxxxxxxxxxxxxxxxxx hidden_states: {hidden_states}")
-        logger.info(f"xxxxxxxxxxxxxxxxxxx hidden_states.shape: {hidden_states.shape}")
+        # logger.info(f"xxxxxxxxxxxxxxxxxxx hidden_states: {hidden_states}")
+        # logger.info(f"xxxxxxxxxxxxxxxxxxx hidden_states.shape: {hidden_states.shape}")
         embedding = hidden_states[last_token_indices]
-        logger.info(f"cu_seqlens cu_seqlens: {cu_seqlens}")
-        logger.info(f"xxxxxxxxxxxxxxxxxxx embedding: {embedding}")
+        # logger.info(f"cu_seqlens cu_seqlens: {cu_seqlens}")
+        # logger.info(f"xxxxxxxxxxxxxxxxxxx embedding: {embedding}")
         # embedding = self.pooling.forward(output, None)
         cpu_results = embedding.view(-1).tolist()
 
