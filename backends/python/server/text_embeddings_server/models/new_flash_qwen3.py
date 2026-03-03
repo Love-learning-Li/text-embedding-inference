@@ -1,6 +1,7 @@
 import torch
 import torch_npu
 import json
+import os
 from pathlib import Path
 from torch import nn
 import torch.nn.functional as F
@@ -18,6 +19,18 @@ from text_embeddings_server.utils.flash_attn import attention
 tracer = trace.get_tracer(__name__)
 from loguru import logger
 
+ENABLE_ONCE_INFO_LOG = False
+_ONCE_INFO_KEYS = set()
+
+
+def logger_info_once(key: str, message: str):
+    if not ENABLE_ONCE_INFO_LOG:
+        return
+    if key in _ONCE_INFO_KEYS:
+        return
+    _ONCE_INFO_KEYS.add(key)
+    logger.info(message)
+
 def load_weight(model_path, weight_map, name, dtype, device):
     """
     Helper function to load a weight tensor from safetensors.
@@ -31,82 +44,45 @@ def load_weight(model_path, weight_map, name, dtype, device):
             return f.get_tensor(name).to(dtype).to(device)
 
 
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb_origin(q, k, cos, sin, unsqueeze_dim=1):
-    if q.dim() != 3 or k.dim() !=3:
-        return q, k 
+# def apply_rotary_pos_emb_npu1(q, k, cos, sin, unsqueeze_dim=1):
+#     t, n, d = q.shape
     
-    t, n, d = q.shape
+#     def _normalize_coeff_for_basnd(coeff: torch.Tensor) -> Optional[torch.Tensor]:
+#         if coeff.dim() == 3 and coeff.shape[0] == 1 and coeff.shape[1] == t and coeff.shape[2] == d:
+#             coeff_t1d = coeff.squeeze(0).unsqueeze(1)
+#         elif coeff.dim() == 2 and coeff.shape[0] == t and coeff.shape[1] == d:
+#             coeff_t1d = coeff.unsqueeze(1)
+#         elif coeff.dim() == 3 and coeff.shape[0] == t and coeff.shape[1] == 1 and coeff.shape[2] == d:
+#             coeff_t1d = coeff
+#         else:    
+#             return None
+#         return coeff_t1d.permute(1, 0, 2).unsqueeze(0).contiguous()
     
-    def _normalize_coeff_for_tnd(coeff: torch.Tensor) -> Optional[torch.Tensor]:
-        if coeff.dim() == 2 and coeff.shape == (t,d):
-            return coeff.unsqueeze(1)
-        if coeff.dim() == 3:
-            if coeff.shape[0] == 1 and coeff.shape[1] == t and coeff.shape[2] == d:
-                return coeff.squeeze(0).unsqueeze(1)
-            if coeff.shape[0] == t and coeff.shape[1] in (1,n) and coeff.shape[2] == d:
-                return coeff
-            
-        return None
+#     cos_bnsd = _normalize_coeff_for_basnd(cos)
+#     sin_bnsd = _normalize_coeff_for_basnd(sin)
+#     if cos_bnsd is None or sin_bnsd is None:
+#         return q, k
     
-    cos_native = _normalize_coeff_for_tnd(cos)
-    sin_native = _normalize_coeff_for_tnd(sin)
+#     q_bnsd = q.permute(1, 0, 2).unsqueeze(0).contiguous()
+#     k_bnsd = k.permute(1, 0, 2).unsqueeze(0).contiguous()
+#     q_bnsd = q_bnsd.to(device=q.device, dtype=q.dtype)
+#     k_bnsd = k_bnsd.to(device=q.device, dtype=q.dtype)
     
-    if cos_native is None or sin_native is None:
-        return q, k
+#     cos_bnsd = cos_bnsd.to(device=q.device, dtype=q.dtype)
+#     sin_bnsd = sin_bnsd.to(device=q.device, dtype=q.dtype)
     
-    cos_native = cos_native.to(device=q.device, dtype=q.dtype)
-    sin_native = sin_native.to(device=q.device, dtype=q.dtype)
+#     q_embed_bnsd = torch_npu.npu_rotary_mul(q_bnsd, cos_bnsd, sin_bnsd)
+#     k_embed_bnsd = torch_npu.npu_rotary_mul(k_bnsd, cos_bnsd, sin_bnsd)
     
-    q_embed = (q * cos_native) + (rotate_half(q) * sin_native)
-    k_embed = (k * cos_native) + (rotate_half(k) * sin_native)
-
-    return q_embed, k_embed
-
-def apply_rotary_pos_emb_npu1(q, k, cos, sin, unsqueeze_dim=1):
-    t, n, d = q.shape
-    
-    def _normalize_coeff_for_basnd(coeff: torch.Tensor) -> Optional[torch.Tensor]:
-        if coeff.dim() == 3 and coeff.shape[0] == 1 and coeff.shape[1] == t and coeff.shape[2] == d:
-            coeff_t1d = coeff.squeeze(0).unsqueeze(1)
-        elif coeff.dim() == 2 and coeff.shape[0] == t and coeff.shape[1] == d:
-            coeff_t1d = coeff.unsqueeze(1)
-        elif coeff.dim() == 3 and coeff.shape[0] == t and coeff.shape[1] == 1 and coeff.shape[2] == d:
-            coeff_t1d = coeff
-        else:    
-            return None
-        return coeff_t1d.permute(1, 0, 2).unsqueeze(0).contiguous()
-    
-    cos_bnsd = _normalize_coeff_for_basnd(cos)
-    sin_bnsd = _normalize_coeff_for_basnd(sin)
-    if cos_bnsd is None or sin_bnsd is None:
-        return q, k
-    
-    q_bnsd = q.permute(1, 0, 2).unsqueeze(0).contiguous()
-    k_bnsd = k.permute(1, 0, 2).unsqueeze(0).contiguous()
-    q_bnsd = q_bnsd.to(device=q.device, dtype=q.dtype)
-    k_bnsd = k_bnsd.to(device=q.device, dtype=q.dtype)
-    
-    cos_bnsd = cos_bnsd.to(device=q.device, dtype=q.dtype)
-    sin_bnsd = sin_bnsd.to(device=q.device, dtype=q.dtype)
-    
-    q_embed_bnsd = torch_npu.npu_rotary_mul(q_bnsd, cos_bnsd, sin_bnsd)
-    k_embed_bnsd = torch_npu.npu_rotary_mul(k_bnsd, cos_bnsd, sin_bnsd)
-    
-    q_embed = q_embed_bnsd.squeeze(0).permute(1, 0, 2).contiguous()
-    k_embed = k_embed_bnsd.squeeze(0).permute(1, 0, 2).contiguous()   
-    return q_embed, k_embed
+#     q_embed = q_embed_bnsd.squeeze(0).permute(1, 0, 2).contiguous()
+#     k_embed = k_embed_bnsd.squeeze(0).permute(1, 0, 2).contiguous()   
+#     return q_embed, k_embed
         
 
 def apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1):
     
     enable_fp32_compute = False
+    
     def _pre_process(
         x: torch.Tensor,
         cos: torch.Tensor,
@@ -146,8 +122,14 @@ def apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1):
     # cos, sin: [1, seq_len, 1, head_dim]
     cos = cos.reshape(1, -1, 1, head_dim)
     sin = sin.reshape(1, -1, 1, head_dim)
-    # logger.info(f"ttttttttttttttttttttttttt cos.shape:{cos.shape}, sin.shape:{sin.shape}")
-    # logger.info(f"ttttttttttttttttttttttttt q_.shape:{q_.shape}, k_.shape:{k_.shape}")
+    logger_info_once(
+        "rope_npu_coeff_shape",
+        f"[RoPE] coeff shape: cos={tuple(cos.shape)}, sin={tuple(sin.shape)}",
+    )
+    logger_info_once(
+        "rope_npu_qk_shape",
+        f"[RoPE] q/k shape before npu_rotary_mul: q={tuple(q_.shape)}, k={tuple(k_.shape)}",
+    )
     output_q = torch_npu.npu_rotary_mul(q_, cos, sin)
     output_k = torch_npu.npu_rotary_mul(k_, cos, sin)
 
@@ -157,11 +139,6 @@ def apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1):
     return output_q, output_k
     
 def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
-        # cos = cos.unsqueeze(unsqueeze_dim)
-    # sin = sin.unsqueeze(unsqueeze_dim)
-    # q_embed = (q * cos) + (rotate_half(q) * sin)
-    # k_embed = (k * cos) + (rotate_half(k) * sin)
-    # return q_embed, k_embed
     
     if q.dim() != 3 or k.dim !=3:
         return q, k 
@@ -246,12 +223,6 @@ class Qwen3RMSNorm:
             return hidden_states
         else:
             input_dtype = hidden_states.dtype
-            # hidden_states = hidden_states.to(torch.float32)
-            # variance = hidden_states.pow(2).mean(-1, keepdim=True)
-            # hidden_states = hidden_states * torch.rsqrt(
-            #     variance + self.variance_epsilon
-            # )
-            # return self.weight * hidden_states.to(input_dtype)
             return torch_npu.npu_rms_norm(hidden_states.to(input_dtype), self.weight, epsilon = self.variance_epsilon)[0]
 
 
@@ -335,25 +306,22 @@ class Qwen3Attention:
 		)
 		
         cos, sin = position_embeddings
-        # if self.layer_idx == 0:
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx q_origin.shape: {q.shape}")
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx k_origin.shape: {k.shape}")
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx cos.shape: {cos.shape}")
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx sin.shape: {sin.shape}")
+        if self.layer_idx == 0:
+            logger_info_once(
+                "attn_layer0_qkvcos_shape",
+                f"[Attention][layer0] q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}, cos={tuple(cos.shape)}, sin={tuple(sin.shape)}",
+            )
         q, k = apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1)
 
         if self.num_key_value_groups > 1:
             k = k.repeat_interleave(self.num_key_value_groups, dim=1)
             v= v.repeat_interleave(self.num_key_value_groups, dim=1)
            
-        # q= q.view(-1, self.num_heads, self.head_dim)
-        # k= k.view(-1, self.num_heads, self.head_dim)
-        # v= v.view(-1, self.num_heads, self.head_dim)
-        # attn_output = attn_output.view(-1, self.num_heads, self.head_dim)
-        # if self.layer_idx == 0:
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx q: {q.shape}")
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx k: {k.shape}")
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx v: {v.shape}")
+        if self.layer_idx == 0:
+            logger_info_once(
+                "attn_layer0_qkv_after_gqa",
+                f"[Attention][layer0] q/k/v after gqa: q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}",
+            )
         attn_output = torch.empty_like(q)
         attention(
             q,
@@ -367,9 +335,11 @@ class Qwen3Attention:
             is_causal=True,
             attn_mask=attn_mask,
         )
-        # if self.layer_idx == 0:
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx attn_output.shape: {attn_output.shape}")
-        #     logger.info(f"xxxxxxxxxxxxxxxxxxx attn_output: {attn_output}")
+        if self.layer_idx == 0:
+            logger_info_once(
+                "attn_layer0_output_shape",
+                f"[Attention][layer0] attn_output shape={tuple(attn_output.shape)}",
+            )
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = torch_npu.npu_linear(attn_output, self.o_proj_weight, bias = None)
 
@@ -413,6 +383,12 @@ class Qwen3MLP:
     def forward(self, hidden_state):
 		# gated_hidden_states = torch_npu.npu_linear(hidden_state, self.gate_proj_weight, bias = None)
 		# uped_hidden_states = torch_npu.npu_linear(hidden_state, self.up_proj_weight, bias = None)
+        		
+        #return torch_npu.npu_linear(
+		#	self.act_fn(gated_hidden_states) * uped_hidden_states,
+		#	self.down_proj_weight, 
+		#	bias = None
+		#)
         gate_up_states = torch_npu.npu_linear(hidden_state, self.gate_up_proj_weight, bias=None)
         hidden_states = torch_npu.npu_swiglu(gate_up_states, dim=-1)
 
@@ -421,12 +397,7 @@ class Qwen3MLP:
             self.down_proj_weight, 
             bias = None
         )
-		
-        #return torch_npu.npu_linear(
-		#	self.act_fn(gated_hidden_states) * uped_hidden_states,
-		#	self.down_proj_weight, 
-		#	bias = None
-		#)
+
 
 
 class Qwen3DecoderLayer:
@@ -564,7 +535,7 @@ class FlashQwen3Model:
     ):
         inputs_embeds = nn.functional.embedding(input_ids, self.word_embeddings_weight)
         hidden_states = inputs_embeds
-        # logger.info(f"xxxxxxxxxxxxxxxxxxx position_ids: {position_ids}")
+        logger_info_once("model_position_ids_shape", f"[Model] position_ids shape={tuple(position_ids.shape)}")
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         for layer in self.layers:
             hidden_states = layer.forward(
@@ -614,7 +585,7 @@ class FlashQwen3(Model):
     @tracer.start_as_current_span("embed")
     def embed(self, batch: Union[FlashBatch, PaddedBatch]) -> List[Embedding]:
         if isinstance(batch, PaddedBatch):
-            # logger.info(f"xxxxxxxxxxxxxxxxxxx input_ids.shape: {batch.input_ids.shape}")
+            logger_info_once("embed_padded_input_ids_shape", f"[Embed] PaddedBatch input_ids shape={tuple(batch.input_ids.shape)}")
             input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
             max_input_lens = 0
             cu_seqlens = torch.cat(
@@ -653,11 +624,10 @@ class FlashQwen3(Model):
         
         last_token_indices = cu_seqlens[1:] - 1
         hidden_states = output.last_hidden_state.cpu()
-        # logger.info(f"xxxxxxxxxxxxxxxxxxx hidden_states: {hidden_states}")
-        # logger.info(f"xxxxxxxxxxxxxxxxxxx hidden_states.shape: {hidden_states.shape}")
+        logger_info_once("embed_hidden_states_shape", f"[Embed] hidden_states shape={tuple(hidden_states.shape)}")
         embedding = hidden_states[last_token_indices]
-        # logger.info(f"cu_seqlens cu_seqlens: {cu_seqlens}")
-        # logger.info(f"xxxxxxxxxxxxxxxxxxx embedding: {embedding}")
+        logger_info_once("embed_cu_seqlens", f"[Embed] cu_seqlens={cu_seqlens.tolist()}")
+        logger_info_once("embed_embedding_shape", f"[Embed] embedding shape={tuple(embedding.shape)}")
         # embedding = self.pooling.forward(output, None)
         cpu_results = embedding.view(-1).tolist()
 
