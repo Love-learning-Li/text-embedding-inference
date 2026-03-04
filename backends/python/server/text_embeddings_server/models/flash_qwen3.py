@@ -1,4 +1,6 @@
+import os
 import torch
+import torch_npu
 import json
 from pathlib import Path
 from torch import nn
@@ -89,6 +91,56 @@ def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
+ 
+def apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1):
+        
+    enable_fp32_compute = False
+    def _pre_process(
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Size, torch.dtype]:
+            origin_shape = x.shape
+            if len(origin_shape) == 3:
+                # x: [seq_len, num_heads, head_size]
+                x = x.unsqueeze(0)
+
+            origin_dtype = x.dtype
+            if enable_fp32_compute:
+                x = x.float()
+                cos = cos.float()
+                sin = sin.float()
+
+            return x, cos, sin, origin_shape, origin_dtype
+        
+    def _post_process(
+        output: torch.Tensor,
+        origin_shape: torch.Size,
+        origin_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if len(origin_shape) == 3:
+            output = output.squeeze(0)
+        if enable_fp32_compute:
+            output = output.to(origin_dtype)
+        return output
+    
+    # q_ [1, seq_len, num_heads, head_size]
+    # k_ [1, seq_len, num_heads // 2, head_size]
+    q_, cos, sin, q_origin_shape, q_origin_dtype = _pre_process(q, cos, sin)
+    k_, cos, sin, k_origin_shape, k_origin_dtype = _pre_process(k, cos, sin)
+    
+    head_dim = q_.shape[-1]
+
+    # cos, sin: [1, seq_len, 1, head_dim]
+    cos = cos.reshape(1, -1, 1, head_dim)
+    sin = sin.reshape(1, -1, 1, head_dim)
+    output_q = torch_npu.npu_rotary_mul(q_, cos, sin)
+    output_k = torch_npu.npu_rotary_mul(k_, cos, sin)
+
+    output_q = _post_process(output_q, q_origin_shape, q_origin_dtype)
+    output_k = _post_process(output_k, k_origin_shape, k_origin_dtype)
+
+    return output_q, output_k
 
 
 def compute_default_rope_parameters(
@@ -125,12 +177,13 @@ class Qwen3RMSNorm:
         self,
         model_path,
         weight_map,
+        prefix,
         name,
         device,
         dtype,
         eps=1e-6,
     ):
-        self.weight = load_weight(model_path, weight_map, name, dtype, device)
+        self.weight = load_weight(model_path, weight_map, prefix, name, dtype, device)
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
@@ -143,6 +196,10 @@ class Qwen3RMSNorm:
                 hidden_states, self.weight, self.variance_epsilon
             )
             return hidden_states
+        elif hidden_states.device.type == "npu":
+            input_dtype = hidden_states.dtype
+            return torch_npu.npu_rms_norm(hidden_states.to(input_dtype),
+                                          self.weight, epsilon = self.variance_epsilon)[0]
         else:
             input_dtype = hidden_states.dtype
             hidden_states = hidden_states.to(torch.float32)
@@ -158,6 +215,7 @@ class Qwen3Attention:
         self,
         model_path,
         weight_map,
+        prefix,
         device,
         dtype,
         config: Qwen3Config,
@@ -171,6 +229,7 @@ class Qwen3Attention:
         self.q_proj_weight = load_weight(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.self_attn.q_proj.weight",
             dtype,
             device,
@@ -178,6 +237,7 @@ class Qwen3Attention:
         self.k_proj_weight = load_weight(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.self_attn.k_proj.weight",
             dtype,
             device,
@@ -185,6 +245,7 @@ class Qwen3Attention:
         self.v_proj_weight = load_weight(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.self_attn.v_proj.weight",
             dtype,
             device,
@@ -192,6 +253,7 @@ class Qwen3Attention:
         self.o_proj_weight = load_weight(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.self_attn.o_proj.weight",
             dtype,
             device,
@@ -199,6 +261,7 @@ class Qwen3Attention:
         self.q_norm = Qwen3RMSNorm(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.self_attn.q_norm.weight",
             device,
             dtype,
@@ -285,6 +348,7 @@ class Qwen3MLP:
         self,
         model_path,
         weight_map,
+        prefix,
         device,
         dtype,
         config: Qwen3Config,
@@ -293,6 +357,7 @@ class Qwen3MLP:
         self.gate_proj_weight = load_weight(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.mlp.gate_proj.weight",
             dtype,
             device,
@@ -300,6 +365,7 @@ class Qwen3MLP:
         self.up_proj_weight = load_weight(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.mlp.up_proj.weight",
             dtype,
             device,
@@ -307,6 +373,7 @@ class Qwen3MLP:
         self.down_proj_weight = load_weight(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.mlp.down_proj.weight",
             dtype,
             device,
@@ -362,6 +429,7 @@ class Qwen3DecoderLayer:
         self.post_attention_layernorm = Qwen3RMSNorm(
             model_path,
             weight_map,
+            prefix,
             f"layers.{layer_idx}.post_attention_layernorm.weight",
             device,
             dtype,
@@ -645,3 +713,41 @@ class FlashQwen3(Model):
             )
             for i in range(len(batch))
         ]
+        
+    @tracer.start_as_current_span("predict")
+    def predict(self, batch: Union[FlashBatch, PaddedBatch]) -> List[Score]:
+        if isinstance(batch, PaddedBatch):
+            input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+            max_input_lens = 0  # This value will not be used
+            cu_seqlens = torch.cat(
+                (input_lens.new_tensor([0]), input_lens.cumsum(-1).int())
+            )
+            mask = batch.attention_mask.bool()
+            bsz, tgt_len = mask.size()
+            min_val = torch.finfo(self.dtype).min
+            attn_mask = torch.full(
+                [bsz, 1, tgt_len, tgt_len],
+                fill_value=min_val,
+                device=self.device,
+                dtype=self.dtype,
+            )
+            expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, tgt_len)
+            attn_mask = attn_mask.masked_fill(expanded_mask, 0.0)
+        elif isinstance(batch, FlashBatch):
+            cu_seqlens = batch.cu_seqlens
+            mask = None
+            attn_mask = None
+            max_input_lens = batch.max_s
+
+        logger.info(f"333333333333333333333 batch.input_ids: {batch.input_ids}")
+        logger.info(f"333333333333333333333 batch.position_ids: {batch.position_ids}")
+        logits = self.model.forward(
+            input_ids=batch.input_ids,
+            position_ids=batch.position_ids,
+            cu_seqlens=cu_seqlens,
+            max_s=max_input_lens,
+            mask=mask,
+            attn_mask=attn_mask,
+        )
+    
+        return [Score(values=[p.item()]) for p in logits]

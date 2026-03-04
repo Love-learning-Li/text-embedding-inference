@@ -106,6 +106,7 @@ class FlashBatch(Batch):
         cls, pb: embed_pb2.EmbedRequest, device: torch.device, max_input_length: int
     ) -> "FlashBatch":
         batch_input_ids = torch.tensor(pb.input_ids, dtype=torch.int32, device=device)
+        logger.info(f"xxxxxxxxxxxxxxxxxxx input_ids.shape: {batch_input_ids}")
         batch_token_type_ids = torch.tensor(
             pb.token_type_ids, dtype=torch.int32, device=device
         )

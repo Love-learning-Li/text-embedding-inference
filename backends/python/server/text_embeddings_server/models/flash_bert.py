@@ -246,7 +246,7 @@ class BertLayer:
 
         self.intermediate_weight = (
             handle.get_tensor(f"{prefix}.intermediate.dense.weight")
-            .T.to(dtype)
+            .T.contiguous().to(dtype)
             .to(device)
         )
         self.intermediate_bias = (
@@ -274,16 +274,24 @@ class BertLayer:
         self.layer_norm = FastLayerNorm(
             f"{prefix}.output.LayerNorm", handle, device, dtype, config
         )
+        # torch.ops.load_library("/home/wangyongjun/catlass/output/python_extension/libcatlass_torch.so")
+        torch.ops.load_library("/home/wangyongjun/build/libtorch_binding.so")
 
     def forward(self, hidden_states, cu_seqlens, max_s, attn_mask=None):
         hidden_states = self.attention.forward(
             hidden_states, cu_seqlens, max_s, attn_mask
         )
         residual = hidden_states
-        hidden_states = F.linear(
-            hidden_states, self.intermediate_weight.T, self.intermediate_bias
-        )
-        hidden_states = self.intermediate_act_fn(hidden_states)
+        # hidden_states = F.linear(
+        #     hidden_states, self.intermediate_weight.T, self.intermediate_bias
+        # )
+        # hidden_states = self.intermediate_act_fn(hidden_states)
+        # hidden_states = torch.ops.CatlassTorch.matmul_gelu(hidden_states, self.weight, self.bias, "float16")
+        hidden_states = torch.ops.my_ops.matmul_gelu(hidden_states, self.intermediate_weight, self.intermediate_bias)
+        # torch.npu.synchronize()
+        # logger.info(f"-------------------hidden_states shape: {hidden_states.shape}, self.intermediate_weight shape: {self.intermediate_weight.shape}")
+        # logger.info(f"-------------------hidden_states: {hidden_states}")
+        
         hidden_states = F.linear(hidden_states, self.output_weight.T, self.output_bias)
         hidden_states, _ = self.layer_norm.forward(hidden_states, residual)
         return hidden_states
@@ -324,6 +332,58 @@ class FlashBertModel:
             return outputs[cu_seqlens[:-1]]
         return encoder_outputs[cu_seqlens[:-1]]
 
+  
+class BertClassificationHead(nn.Module):
+    """Head for sentence-level classification tasks."""
+
+    def __init__(self, handle, device, dtype, config):
+        super().__init__()
+        self.num_labels = config.num_labels
+        self.classifier_dense_weight = (
+            handle.get_tensor(f"bert.pooler.dense.weight").to(dtype).to(device)
+        )
+        self.classifier_dense_bias = (
+            handle.get_tensor(f"bert.pooler.dense.bias").to(dtype).to(device)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # CLSPool has already been applied in `pooling`
+        x = F.linear(
+            x, self.classifier_dense_weight, self.classifier_dense_bias
+        )
+        return x
+       
+
+class BertForSequenceClassification(nn.Module):
+    def __init__(self, handle, device, dtype, config: BertConfig):
+        super().__init__()
+        self.config = config
+        self.num_labels = config.num_labels
+        
+        self.bert = FlashBertModel(handle, device, dtype, config)
+        self.classifier = BertClassificationHead(handle, device, dtype, config)
+    
+    def forward(
+            self,
+            input_ids,
+            token_type_ids,
+            position_ids,
+            cu_seqlens,
+            max_s,
+            mask=None,
+            attn_mask=None,
+            ):
+
+        sequence_output = self.bert(input_ids,
+            token_type_ids,
+            position_ids,
+            cu_seqlens,
+            max_s,
+            mask=None,
+            attn_mask=None)
+        logits =  self.classifier(sequence_output)
+        return logits
+    
 
 class FlashBert(Model):
     def __init__(
@@ -341,8 +401,22 @@ class FlashBert(Model):
         else:
             self.max_input_length = config.max_position_embeddings
 
+        safe_weight_path = model_path / "model.safetensors"
+        bin_weight_path = model_path/"pytorch_model.bin"
+        if not safe_weight_path.exists() and not bin_weight_path.exists():
+            logger.error(f"pytorch_model.bin and model.safetensors do not exist")
+            raise FileNotFoundError(f"pytorch_model.bin and model.safetensors do not exist")
+        if not safe_weight_path.exists():
+            logger.info(f"model.safetensors does not exist, translate pytorch_model.bin to model.safetensors")
+            stat_dict = torch.load(bin_weight_path.as_posix(), map_loacation='cpu')
+            save_file(stat_dict, safe_weight_path.as_posix())
+
         with safe_open(model_path / "model.safetensors", framework="pt") as f:
-            model = FlashBertModel(f, device, dtype, config)
+            if config.architectures[0].endswith("Classification"):
+                model = BertForSequenceClassification(f, device, dtype, config)
+            else:    
+                model = FlashBertModel(f, device, dtype, config)
+                
         self.device = device
         self.dtype = dtype
         self.hidden_size = config.hidden_size
