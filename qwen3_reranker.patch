@@ -1,0 +1,2760 @@
+diff --git a/backends/grpc-client/src/client.rs b/backends/grpc-client/src/client.rs
+index 1f6036e..27ffa0d 100644
+--- a/backends/grpc-client/src/client.rs
++++ b/backends/grpc-client/src/client.rs
+@@ -18,7 +18,7 @@ impl Client {
+         let channel = Channel::builder(uri).connect().await?;
+ 
+         Ok(Self {
+-            stub: EmbeddingServiceClient::new(channel),
++            stub: EmbeddingServiceClient::new(channel).max_decoding_message_size(100*1024*1024).max_encoding_message_size(100*1024*1024),
+         })
+     }
+ 
+@@ -32,7 +32,7 @@ impl Client {
+             .await?;
+ 
+         Ok(Self {
+-            stub: EmbeddingServiceClient::new(channel),
++            stub: EmbeddingServiceClient::new(channel).max_decoding_message_size(100*1024*1024).max_encoding_message_size(100*1024*1024),
+         })
+     }
+ 
+@@ -65,6 +65,27 @@ impl Client {
+         Ok(response.embeddings)
+     }
+ 
++    #[instrument(skip_all)]
++    pub async fn embed_all(
++        &mut self,
++        input_ids: Vec<u32>,
++        token_type_ids: Vec<u32>,
++        position_ids: Vec<u32>,
++        cu_seq_lengths: Vec<u32>,
++        max_length: u32,
++    ) -> Result<Vec<TokenEmbedding>> {
++        let request = tonic::Request::new(EmbedRequest {
++            input_ids,
++            token_type_ids,
++            position_ids,
++            max_length,
++            cu_seq_lengths,
++        })
++        .inject_context();
++        let response = self.stub.embed_all(request).await?.into_inner();
++        Ok(response.allembeddings)
++    }
++    
+     #[instrument(skip_all)]
+     pub async fn predict(
+         &mut self,
+diff --git a/backends/proto/embed.proto b/backends/proto/embed.proto
+index 036f3db..71d72e0 100644
+--- a/backends/proto/embed.proto
++++ b/backends/proto/embed.proto
+@@ -5,6 +5,7 @@ package embedding.v1;
+ service EmbeddingService {
+     /// Decode token for a list of prefilled batches
+     rpc Embed (EmbedRequest) returns (EmbedResponse);
++    rpc Embed_all (EmbedRequest) returns (RawEmbedResponse);
+     /// Health check
+     rpc Health (HealthRequest) returns (HealthResponse);
+     /// Predict
+@@ -38,3 +39,11 @@ message Score {
+ message PredictResponse {
+     repeated Score scores = 1;
+ }
++
++message TokenEmbedding {
++    repeated Embedding embeddings = 1;
++}
++
++message RawEmbedResponse {
++    repeated TokenEmbedding allembeddings = 1;
++}
+\ No newline at end of file
+diff --git a/backends/python/server/Makefile b/backends/python/server/Makefile
+index 6402d63..8ad0028 100644
+--- a/backends/python/server/Makefile
++++ b/backends/python/server/Makefile
+@@ -1,9 +1,3 @@
+-include Makefile-flash-att
+-include Makefile-flash-att-v2
+-
+-unit-tests:
+-	pytest -s -vv -m "not private" tests
+-
+ gen-server:
+ 	# Compile protos
+ 	pip install grpcio-tools==1.62.2 mypy-protobuf==3.6.0 'types-protobuf' --no-cache-dir
+diff --git a/backends/python/server/requirements.txt b/backends/python/server/requirements.txt
+index 687ec10..e46f148 100644
+--- a/backends/python/server/requirements.txt
++++ b/backends/python/server/requirements.txt
+@@ -6,10 +6,10 @@ deprecated==1.2.15 ; python_version >= "3.9" and python_version < "3.13"
+ filelock==3.16.1 ; python_version >= "3.9" and python_version < "3.13"
+ fsspec==2024.10.0 ; python_version >= "3.9" and python_version < "3.13"
+ googleapis-common-protos==1.66.0 ; python_version >= "3.9" and python_version < "3.13"
+-grpc-interceptor==0.15.4 ; python_version >= "3.9" and python_version < "3.13"
+-grpcio-reflection==1.62.3 ; python_version >= "3.9" and python_version < "3.13"
+-grpcio-status==1.62.3 ; python_version >= "3.9" and python_version < "3.13"
+-grpcio==1.68.0 ; python_version >= "3.9" and python_version < "3.13"
++grpc-interceptor==0.15.3 ; python_version >= "3.9" and python_version < "3.13"
++grpcio-reflection==1.58.0 ; python_version >= "3.9" and python_version < "3.13"
++grpcio-status==1.58.0 ; python_version >= "3.9" and python_version < "3.13"
++grpcio==1.58.0 ; python_version >= "3.9" and python_version < "3.13"
+ huggingface-hub==0.26.2 ; python_version >= "3.9" and python_version < "3.13"
+ idna==3.10 ; python_version >= "3.9" and python_version < "3.13"
+ importlib-metadata==7.1.0 ; python_version >= "3.9" and python_version < "3.13"
+@@ -19,7 +19,7 @@ loguru==0.6.0 ; python_version >= "3.9" and python_version < "3.13"
+ markupsafe==3.0.2 ; python_version >= "3.9" and python_version < "3.13"
+ mpmath==1.3.0 ; python_version >= "3.9" and python_version < "3.13"
+ networkx==3.2.1 ; python_version >= "3.9" and python_version < "3.13"
+-numpy==2.0.2 ; python_version >= "3.9" and python_version < "3.13"
++numpy==1.24.0 ; python_version >= "3.9" and python_version < "3.13"
+ nvidia-cublas-cu12==12.4.5.8 ; platform_system == "Linux" and platform_machine == "x86_64" and python_version >= "3.9" and python_version < "3.13"
+ nvidia-cuda-cupti-cu12==12.4.127 ; platform_system == "Linux" and platform_machine == "x86_64" and python_version >= "3.9" and python_version < "3.13"
+ nvidia-cuda-nvrtc-cu12==12.4.127 ; platform_system == "Linux" and platform_machine == "x86_64" and python_version >= "3.9" and python_version < "3.13"
+@@ -51,14 +51,14 @@ requests==2.32.3 ; python_version >= "3.9" and python_version < "3.13"
+ safetensors==0.4.5 ; python_version >= "3.9" and python_version < "3.13"
+ scikit-learn==1.5.2 ; python_version >= "3.9" and python_version < "3.13"
+ scipy==1.13.1 ; python_version >= "3.9" and python_version < "3.13"
+-sentence-transformers==3.3.1 ; python_version >= "3.9" and python_version < "3.13"
++sentence-transformers==3.4.1 ; python_version >= "3.9" and python_version < "3.13"
+ setuptools==75.6.0 ; python_version >= "3.9" and python_version < "3.13"
+ sympy==1.13.1 ; python_version >= "3.9" and python_version < "3.13"
+ threadpoolctl==3.5.0 ; python_version >= "3.9" and python_version < "3.13"
+ tokenizers==0.20.3 ; python_version >= "3.9" and python_version < "3.13"
+-torch==2.5.1 ; python_version >= "3.9" and python_version < "3.13"
++torch==2.1.0 ; python_version >= "3.9" and python_version < "3.13"
+ tqdm==4.67.1 ; python_version >= "3.9" and python_version < "3.13"
+-transformers==4.46.3 ; python_version >= "3.9" and python_version < "3.13"
++transformers==4.51.3 ; python_version >= "3.9" and python_version < "3.13"
+ triton==3.1.0 ; platform_system == "Linux" and platform_machine == "x86_64" and python_version < "3.13" and python_version >= "3.9"
+ typer==0.6.1 ; python_version >= "3.9" and python_version < "3.13"
+ typing-extensions==4.12.2 ; python_version >= "3.9" and python_version < "3.13"
+diff --git a/backends/python/server/text_embeddings_server/models/__init__.py b/backends/python/server/text_embeddings_server/models/__init__.py
+index 1e919f2..9aa5a95 100644
+--- a/backends/python/server/text_embeddings_server/models/__init__.py
++++ b/backends/python/server/text_embeddings_server/models/__init__.py
+@@ -12,29 +12,30 @@ from text_embeddings_server.models.masked_model import MaskedLanguageModel
+ from text_embeddings_server.models.default_model import DefaultModel
+ from text_embeddings_server.models.classification_model import ClassificationModel
+ from text_embeddings_server.models.jinaBert_model import FlashJinaBert
+-from text_embeddings_server.models.flash_mistral import FlashMistral
++# from text_embeddings_server.models.flash_mistral import FlashMistral
+ from text_embeddings_server.models.flash_qwen3 import FlashQwen3
++# from text_embeddings_server.models.qwen3_rerank_model import Qwen3RerankModel
++from text_embeddings_server.models.unixcoder_model import UniXcoderModel
++
+ from text_embeddings_server.utils.device import get_device, use_ipex
+ 
+ __all__ = ["Model"]
+ 
+ TRUST_REMOTE_CODE = os.getenv("TRUST_REMOTE_CODE", "false").lower() in ["true", "1"]
+-DISABLE_TENSOR_CACHE = os.getenv("DISABLE_TENSOR_CACHE", "false").lower() in [
+-    "true",
+-    "1",
+-]
+ # Disable gradients
+ torch.set_grad_enabled(False)
+ 
+ FLASH_ATTENTION = True
+ try:
+     from text_embeddings_server.models.flash_bert import FlashBert
++    from text_embeddings_server.models.flash_roberta import FlashRoberta
+ except ImportError as e:
+     logger.warning(f"Could not import Flash Attention enabled models: {e}")
+     FLASH_ATTENTION = False
+ 
+ if FLASH_ATTENTION:
+     __all__.append(FlashBert)
++    __all__.append(FlashRoberta)
+ 
+ 
+ def wrap_model_if_hpu(model_handle, device):
+@@ -70,8 +71,15 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
+     else:
+         raise RuntimeError(f"Unknown dtype {dtype}")
+ 
++    enable_boost = os.getenv("ENABLE_BOOST", "True")
++    if enable_boost not in("True", "False"):
++        raise ValueError("env ENABLE_BOOST value must be True or False")
++    
++    if enable_boost == "True":
++        datatype = torch.bfloat16
++        
+     device = get_device()
+-    logger.info(f"backend device: {device}")
++    logger.info(f"backend device: {device.type}")
+ 
+     config = AutoConfig.from_pretrained(model_path, trust_remote_code=TRUST_REMOTE_CODE)
+ 
+@@ -89,7 +97,7 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
+         config: BertConfig
+         if (
+             use_ipex()
+-            or device.type in ["cuda", "hpu"]
++            or device.type in ["cuda", "hpu", "npu"]
+             and config.position_embedding_type == "absolute"
+             and datatype in [torch.float16, torch.bfloat16]
+             and FLASH_ATTENTION
+@@ -116,18 +124,34 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
+         else:
+             return create_model(DefaultModel, model_path, device, datatype, pool)
+ 
++    if config.model_type == "roberta" or config.model_type == "xlm-roberta":
++        if str(model_path).endswith("unixcoder-base"):
++            return create_model(UniXcoderModel, model_path, device, datatype)
++        
++        if device.type in ["npu"] and datatype in [torch.float16, torch.bfloat16] and FLASH_ATTENTION:
++            return create_model(FlashRoberta, model_path, device, datatype)
++        else:
++            return create_model(DefaultModel, model_path, device, datatype, pool)
++        
+     if config.model_type == "mistral" and device.type == "hpu":
+         try:
+             return create_model(FlashMistral, model_path, device, datatype, pool)
+         except FileNotFoundError:
+             return create_model(DefaultModel, model_path, device, datatype, pool)
+ 
+-    if config.model_type == "qwen3" and device.type == "hpu":
++    if config.model_type == "qwen3" and (device.type == "hpu" or device.type == "npu"):
+         try:
+             return create_model(FlashQwen3, model_path, device, datatype, pool)
+         except FileNotFoundError:
+             return create_model(DefaultModel, model_path, device, datatype, pool)
+-
++        
++    if config.model_type == "qwen3" and os.getenv("IS_RERANK", None) and device.type == "npu":
++        try:
++            logger.info("IS_RERANK is set, use Qwen3RerankModel")
++            return create_model(Qwen3RerankModel, model_path, device, datatype)
++        except FileNotFoundError:
++            return create_model(DefaultModel, model_path, device, datatype, pool)
++        
+     # Default case
+     if config.architectures[0].endswith("Classification"):
+         return create_model(ClassificationModel, model_path, device, datatype)
+diff --git a/backends/python/server/text_embeddings_server/models/classification_model.py b/backends/python/server/text_embeddings_server/models/classification_model.py
+index 91f33ed..a1395ef 100644
+--- a/backends/python/server/text_embeddings_server/models/classification_model.py
++++ b/backends/python/server/text_embeddings_server/models/classification_model.py
+@@ -70,3 +70,4 @@ class ClassificationModel(Model):
+         output = self.model(**kwargs, return_dict=True)
+         all_scores = output.logits.tolist()
+         return [Score(values=scores) for scores in all_scores]
++
+diff --git a/backends/python/server/text_embeddings_server/models/default_model.py b/backends/python/server/text_embeddings_server/models/default_model.py
+index 66a9b6b..20c13b3 100644
+--- a/backends/python/server/text_embeddings_server/models/default_model.py
++++ b/backends/python/server/text_embeddings_server/models/default_model.py
+@@ -1,17 +1,24 @@
++import os
+ import inspect
+ import torch
+ 
+ from pathlib import Path
+ from typing import Type, List
+-from transformers import AutoModel
++from transformers import AutoModel, AutoConfig, AutoTokenizer
+ from opentelemetry import trace
++
++from collections import defaultdict
++import numpy as np
++from loguru import logger
++
+ from text_embeddings_server.models.pooling import DefaultPooling
+ 
+ from text_embeddings_server.models import Model
+-from text_embeddings_server.models.types import PaddedBatch, Embedding, Score
++from text_embeddings_server.models.types import PaddedBatch, Embedding, Score, TokenEmbedding
+ 
+ tracer = trace.get_tracer(__name__)
+ 
++IS_CAUSAL = os.getenv("IS_CAUSAL", "").lower()
+ 
+ class DefaultModel(Model):
+     def __init__(
+@@ -19,16 +26,18 @@ class DefaultModel(Model):
+         model_path: Path,
+         device: torch.device,
+         dtype: torch.dtype,
+-        pool: str = "cls",
++        pool: str,
+         trust_remote: bool = False,
+     ):
+         model = (
+             AutoModel.from_pretrained(model_path, trust_remote_code=trust_remote)
+             .to(dtype)
+             .to(device)
++            .eval()
+         )
+         self.hidden_size = model.config.hidden_size
+-        self.pooling = DefaultPooling(self.hidden_size, pooling_mode=pool)
++        
++        self.pool = pool
+ 
+         position_offset = 0
+         model_type = model.config.model_type
+@@ -50,6 +59,18 @@ class DefaultModel(Model):
+             is not None
+         )
+ 
++        if self.pool == "splade":
++            self.tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
++            self.config = AutoConfig.from_pretrained(model_path)
++            self.vocab_size = self.config.vocab_size
++        
++            self.sparse_linear = torch.nn.Linear(self.hidden_size, 1).to(device).to(dtype)
++            sparse_model_path = os.path.join(model_path, "sparse_linear.pt")
++            sparse_state_dict = torch.load(sparse_model_path, map_location="cpu", weights_only=True)
++            self.sparse_linear.load_state_dict(sparse_state_dict)
++        else:
++            self.pooling = DefaultPooling(self.hidden_size, pooling_mode=pool)
++                
+         super(DefaultModel, self).__init__(model=model, dtype=dtype, device=device)
+ 
+     @property
+@@ -63,19 +84,75 @@ class DefaultModel(Model):
+             kwargs["token_type_ids"] = batch.token_type_ids
+         if self.has_position_ids:
+             kwargs["position_ids"] = batch.position_ids
+-        output = self.model(**kwargs)
+ 
+-        embedding = self.pooling.forward(output, batch.attention_mask)
++        if self.pool == "splade":
++            return self._process_splade(batch, kwargs)
++        else:
++            return self._process_default(batch, kwargs)
+ 
++    def _process_splade(self, batch: PaddedBatch, kwargs: dict):
++        with torch.no_grad():
++            last_hidden_state = self.model(**kwargs, return_dict=True).last_hidden_state
++        sparse_vecs = torch.relu(self.sparse_linear(last_hidden_state))
++        token_weights = sparse_vecs.squeeze(-1)
++        unused_tokens = {self.tokenizer.cls_token_id, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id,
++                         self.tokenizer.unk_token_id}
++        all_token_weights = torch.zeros((len(batch), self.vocab_size), dtype=token_weights.dtype, device=token_weights.device)
++        
++        for i in range(len(batch)):
++            all_token_weights[i, batch.input_ids[i]] = token_weights[i]
++        
++        all_token_weights[:, list(unused_tokens)] = 0
++        
++        embeddings = [
++            Embedding(
++                values=all_token_weights[i].detach().cpu().numpy().tolist()
++            )
++            for i in range(len(batch))
++        ]
++        
++        return embeddings
++    
++    def _process_default(self, batch: PaddedBatch, kwargs: dict):
++        if IS_CAUSAL in ["false", "0"]:
++            with torch.no_grad():
++                output = self.model(**kwargs, is_causal=False)
++        else:
++            with torch.no_grad():
++                output = self.model(**kwargs)
++            
++        embedding = self.pooling.forward(output, batch.attention_mask)
+         cpu_results = embedding.view(-1).tolist()
+-
++        
+         return [
+             Embedding(
+                 values=cpu_results[i * self.hidden_size : (i + 1) * self.hidden_size]
+             )
+             for i in range(len(batch))
+         ]
++    
++    @tracer.start_as_current_span("embed_all")
++    def embed_all(self, batch: PaddedBatch):
++        kwargs = {"input_ids": batch.input_ids, "attention_mask": batch.attention_mask}
++        if self.has_token_type_ids:
++            kwargs["token_type_ids"] = batch.token_type_ids
++        if self.has_position_ids:
++            kwargs["position_ids"] = batch.position_ids
++        output = self.model(**kwargs)
++        embedding = output[0].contiguous()
++        cpu_results = embedding.view(-1).tolist()
++        embedding_result=[]
++        for i in range(len(batch)):
++            embedding_tmp=[
++                Embedding(values=cpu_results[(j+i * batch.max_length) * self.hidden_size :
++                                             (j + 1 + i * batch.max_length) * self.hidden_size])
++                for j in range(batch.input_ids.size()[1])
++            ]
++            token_embeddings=TokenEmbedding(embeddings=embedding_tmp)
++            embedding_result.append(token_embeddings)
+ 
++        return embedding_result
++    
+     @tracer.start_as_current_span("predict")
+     def predict(self, batch: PaddedBatch) -> List[Score]:
+         pass
+diff --git a/backends/python/server/text_embeddings_server/models/flash_bert.py b/backends/python/server/text_embeddings_server/models/flash_bert.py
+index eb11a9c..b8a21d6 100644
+--- a/backends/python/server/text_embeddings_server/models/flash_bert.py
++++ b/backends/python/server/text_embeddings_server/models/flash_bert.py
+@@ -1,14 +1,17 @@
+ import torch
+ from pathlib import Path
+ from torch import nn
++import torch_npu
+ import torch.nn.functional as F
++from loguru import logger
+ from typing import Type, List, Union
+ from safetensors import safe_open
++from safetensors.torch import save_file
+ from transformers.activations import ACT2FN
+ from transformers.models.bert import BertConfig
+ from opentelemetry import trace
+ from text_embeddings_server.models import Model
+-from text_embeddings_server.models.types import FlashBatch, Embedding, PaddedBatch
++from text_embeddings_server.models.types import FlashBatch, PaddedBatch, Embedding, Score
+ from text_embeddings_server.utils.flash_attn import attention
+ from text_embeddings_server.utils.device import use_ipex
+ 
+@@ -40,7 +43,12 @@ class FastLayerNorm:
+         self.variance_epsilon = config.layer_norm_eps
+         self.device = device
+         self.use_ipex = use_ipex()
+-
++        # self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
++        # self.LayerNorm.weight = nn.Parameter(self.weight)
++        # self.LayerNorm.bias = nn.Parameter(self.bias)
++        # torch.npu.config.allow_internal_format=False
++        # torch.ops.load_library("/home/wangyongjun/build/libtorch_binding.so")
++        
+     def forward(self, hidden_states, residual=None):
+         # Flash attention imports
+         normed_hidden_states = None
+@@ -90,10 +98,34 @@ class FastLayerNorm:
+                 residual is not None,
+             )
+             res = residual if residual is not None else hidden_states
++        elif self.device.type == "npu":
++            # logger.info(f"------------------hidden_states:{hidden_states.shape} residual:{residual.shape} weigth:{self.weight.shape} self.bias:{self.bias.shape}")
++            # logger.info(f"------------------hidden_states:{hidden_states.dtype} residual:{residual.dtype} weigth:{self.weight.dtype} self.bias:{self.bias.dtype}")
++            # normed_hidden_states, _, _, _ = torch.ops.my_ops.add_layer_norm(hidden_states, 
++            #                                                                 residual, 
++            #                                                                 self.weight,
++            #                                                                 self.bias, 
++            #                                                                 self.variance_epsilon,
++            #                                                                 False)
++            normed_hidden_states = torch_npu.npu_add_layer_norm(hidden_states, 
++                                                                            residual, 
++                                                                            self.weight,
++                                                                            self.bias, 
++                                                                            self.variance_epsilon,
++                                                                            )[0]
++
++            # if residual is not None:     
++            #     normed_hidden_states = self.LayerNorm(hidden_states + residual)
++            # else:
++            #     normed_hidden_states = self.LayerNorm(hidden_states)
++            
++            # logger.info(f"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx: normed_hidden_states:{normed_hidden_states}")    
++            res = residual if residual is not None else hidden_states
+         return normed_hidden_states, res
+ 
+ 
+ class BertEmbeddings:
++    
+     def __init__(self, prefix, handle, device, dtype, config: BertConfig):
+         self.word_embeddings_weight = (
+             handle.get_tensor(f"{prefix}.word_embeddings.weight").to(dtype).to(device)
+@@ -187,6 +219,7 @@ class BertAttention:
+             q,
+             k,
+             v,
++            self.num_heads,
+             attn_output,
+             cu_seqlens,
+             max_s,
+@@ -214,7 +247,7 @@ class BertLayer:
+ 
+         self.intermediate_weight = (
+             handle.get_tensor(f"{prefix}.intermediate.dense.weight")
+-            .T.to(dtype)
++            .T.contiguous().to(dtype)
+             .to(device)
+         )
+         self.intermediate_bias = (
+@@ -242,16 +275,24 @@ class BertLayer:
+         self.layer_norm = FastLayerNorm(
+             f"{prefix}.output.LayerNorm", handle, device, dtype, config
+         )
++        # torch.ops.load_library("/home/wangyongjun/catlass/output/python_extension/libcatlass_torch.so")
++        torch.ops.load_library("/home/wangyongjun/build/libtorch_binding.so")
+ 
+     def forward(self, hidden_states, cu_seqlens, max_s, attn_mask=None):
+         hidden_states = self.attention.forward(
+             hidden_states, cu_seqlens, max_s, attn_mask
+         )
+         residual = hidden_states
+-        hidden_states = F.linear(
+-            hidden_states, self.intermediate_weight.T, self.intermediate_bias
+-        )
+-        hidden_states = self.intermediate_act_fn(hidden_states)
++        # hidden_states = F.linear(
++        #     hidden_states, self.intermediate_weight.T, self.intermediate_bias
++        # )
++        # hidden_states = self.intermediate_act_fn(hidden_states)
++        # hidden_states = torch.ops.CatlassTorch.matmul_gelu(hidden_states, self.weight, self.bias, "float16")
++        hidden_states = torch.ops.my_ops.matmul_gelu(hidden_states, self.intermediate_weight, self.intermediate_bias)
++        # torch.npu.synchronize()
++        # logger.info(f"-------------------hidden_states shape: {hidden_states.shape}, self.intermediate_weight shape: {self.intermediate_weight.shape}")
++        # logger.info(f"-------------------hidden_states: {hidden_states}")
++        
+         hidden_states = F.linear(hidden_states, self.output_weight.T, self.output_bias)
+         hidden_states, _ = self.layer_norm.forward(hidden_states, residual)
+         return hidden_states
+@@ -292,6 +333,58 @@ class FlashBertModel:
+             return outputs[cu_seqlens[:-1]]
+         return encoder_outputs[cu_seqlens[:-1]]
+ 
++  
++class BertClassificationHead(nn.Module):
++    """Head for sentence-level classification tasks."""
++
++    def __init__(self, handle, device, dtype, config):
++        super().__init__()
++        self.num_labels = config.num_labels
++        self.classifier_dense_weight = (
++            handle.get_tensor(f"bert.pooler.dense.weight").to(dtype).to(device)
++        )
++        self.classifier_dense_bias = (
++            handle.get_tensor(f"bert.pooler.dense.bias").to(dtype).to(device)
++        )
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:
++        # CLSPool has already been applied in `pooling`
++        x = F.linear(
++            x, self.classifier_dense_weight, self.classifier_dense_bias
++        )
++        return x
++       
++
++class BertForSequenceClassification(nn.Module):
++    def __init__(self, handle, device, dtype, config: BertConfig):
++        super().__init__()
++        self.config = config
++        self.num_labels = config.num_labels
++        
++        self.bert = FlashBertModel(handle, device, dtype, config)
++        self.classifier = BertClassificationHead(handle, device, dtype, config)
++    
++    def forward(
++            self,
++            input_ids,
++            token_type_ids,
++            position_ids,
++            cu_seqlens,
++            max_s,
++            mask=None,
++            attn_mask=None,
++            ):
++
++        sequence_output = self.bert(input_ids,
++            token_type_ids,
++            position_ids,
++            cu_seqlens,
++            max_s,
++            mask=None,
++            attn_mask=None)
++        logits =  self.classifier(sequence_output)
++        return logits
++    
+ 
+ class FlashBert(Model):
+     def __init__(
+@@ -309,8 +402,22 @@ class FlashBert(Model):
+         else:
+             self.max_input_length = config.max_position_embeddings
+ 
++        safe_weight_path = model_path / "model.safetensors"
++        bin_weight_path = model_path/"pytorch_model.bin"
++        if not safe_weight_path.exists() and not bin_weight_path.exists():
++            logger.error(f"pytorch_model.bin and model.safetensors do not exist")
++            raise FileNotFoundError(f"pytorch_model.bin and model.safetensors do not exist")
++        if not safe_weight_path.exists():
++            logger.info(f"model.safetensors does not exist, translate pytorch_model.bin to model.safetensors")
++            stat_dict = torch.load(bin_weight_path.as_posix(), map_loacation='cpu')
++            save_file(stat_dict, safe_weight_path.as_posix())
++
+         with safe_open(model_path / "model.safetensors", framework="pt") as f:
+-            model = FlashBertModel(f, device, dtype, config)
++            if config.architectures[0].endswith("Classification"):
++                model = BertForSequenceClassification(f, device, dtype, config)
++            else:    
++                model = FlashBertModel(f, device, dtype, config)
++                
+         self.device = device
+         self.dtype = dtype
+         self.hidden_size = config.hidden_size
+@@ -364,3 +471,41 @@ class FlashBert(Model):
+             )
+             for i in range(len(batch))
+         ]
++        
++    @tracer.start_as_current_span("predict")
++    def predict(self, batch: Union[FlashBatch, PaddedBatch]) -> List[Score]:
++        if isinstance(batch, PaddedBatch):
++            input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
++            max_input_lens = 0  # This value will not be used
++            cu_seqlens = torch.cat(
++                (input_lens.new_tensor([0]), input_lens.cumsum(-1).int())
++            )
++            mask = batch.attention_mask.bool()
++            bsz, tgt_len = mask.size()
++            min_val = torch.finfo(self.dtype).min
++            attn_mask = torch.full(
++                [bsz, 1, tgt_len, tgt_len],
++                fill_value=min_val,
++                device=self.device,
++                dtype=self.dtype,
++            )
++            expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, tgt_len)
++            attn_mask = attn_mask.masked_fill(expanded_mask, 0.0)
++        elif isinstance(batch, FlashBatch):
++            cu_seqlens = batch.cu_seqlens
++            mask = None
++            attn_mask = None
++            max_input_lens = batch.max_s
++
++        logits = self.model.forward(
++            input_ids=batch.input_ids,
++            token_type_ids=batch.token_type_ids,
++            position_ids=batch.position_ids,
++            cu_seqlens=cu_seqlens,
++            max_s=max_input_lens,
++            mask=mask,
++            attn_mask=attn_mask,
++        )
++    
++        all_scores = logits.tolist()
++        return [Score(values=scores) for scores in all_scores]
+\ No newline at end of file
+diff --git a/backends/python/server/text_embeddings_server/models/flash_qwen3.py b/backends/python/server/text_embeddings_server/models/flash_qwen3.py
+index 7406a79..739ac88 100644
+--- a/backends/python/server/text_embeddings_server/models/flash_qwen3.py
++++ b/backends/python/server/text_embeddings_server/models/flash_qwen3.py
+@@ -1,4 +1,6 @@
++import os
+ import torch
++import torch_npu
+ import json
+ from pathlib import Path
+ from torch import nn
+@@ -8,22 +10,30 @@ from safetensors import safe_open
+ from transformers.activations import ACT2FN
+ from transformers.modeling_outputs import BaseModelOutputWithPast
+ from transformers.models.qwen3 import Qwen3Config
++from transformers import AutoTokenizer
+ from opentelemetry import trace
+ from text_embeddings_server.models import Model
+ from text_embeddings_server.models.pooling import DefaultPooling
+-from text_embeddings_server.models.types import FlashBatch, Embedding, PaddedBatch
++from text_embeddings_server.models.types import FlashBatch, PaddedBatch, Embedding, Score
+ from text_embeddings_server.utils.flash_attn import attention
+ 
+ tracer = trace.get_tracer(__name__)
++from loguru import logger
+ 
+-
+-def load_weight(model_path, weight_map, name, dtype, device):
++def load_weight(model_path, weight_map, prefix, name, dtype, device):
+     """
+     Helper function to load a weight tensor from safetensors.
+     """
+-    target_file = weight_map[name]
+-    with safe_open(f"{model_path}/{target_file}", framework="pt") as f:
+-        return f.get_tensor(name).to(dtype).to(device)
++    prefix = prefix + "." if prefix else ""
++    name = prefix + name
++        
++    if weight_map is None:
++        with safe_open(f"{model_path}/model.safetensors", framework="pt") as f:
++            return f.get_tensor(name).to(dtype).to(device)
++    else:
++        target_file = weight_map[name]
++        with safe_open(f"{model_path}/{target_file}", framework="pt") as f:
++            return f.get_tensor(name).to(dtype).to(device)
+ 
+ 
+ def rotate_half(x):
+@@ -39,6 +49,56 @@ def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
+     q_embed = (q * cos) + (rotate_half(q) * sin)
+     k_embed = (k * cos) + (rotate_half(k) * sin)
+     return q_embed, k_embed
++ 
++def apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1):
++        
++    enable_fp32_compute = False
++    def _pre_process(
++        x: torch.Tensor,
++        cos: torch.Tensor,
++        sin: torch.Tensor,
++    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Size, torch.dtype]:
++            origin_shape = x.shape
++            if len(origin_shape) == 3:
++                # x: [seq_len, num_heads, head_size]
++                x = x.unsqueeze(0)
++
++            origin_dtype = x.dtype
++            if enable_fp32_compute:
++                x = x.float()
++                cos = cos.float()
++                sin = sin.float()
++
++            return x, cos, sin, origin_shape, origin_dtype
++        
++    def _post_process(
++        output: torch.Tensor,
++        origin_shape: torch.Size,
++        origin_dtype: torch.dtype,
++    ) -> torch.Tensor:
++        if len(origin_shape) == 3:
++            output = output.squeeze(0)
++        if enable_fp32_compute:
++            output = output.to(origin_dtype)
++        return output
++    
++    # q_ [1, seq_len, num_heads, head_size]
++    # k_ [1, seq_len, num_heads // 2, head_size]
++    q_, cos, sin, q_origin_shape, q_origin_dtype = _pre_process(q, cos, sin)
++    k_, cos, sin, k_origin_shape, k_origin_dtype = _pre_process(k, cos, sin)
++    
++    head_dim = q_.shape[-1]
++
++    # cos, sin: [1, seq_len, 1, head_dim]
++    cos = cos.reshape(1, -1, 1, head_dim)
++    sin = sin.reshape(1, -1, 1, head_dim)
++    output_q = torch_npu.npu_rotary_mul(q_, cos, sin)
++    output_k = torch_npu.npu_rotary_mul(k_, cos, sin)
++
++    output_q = _post_process(output_q, q_origin_shape, q_origin_dtype)
++    output_k = _post_process(output_k, k_origin_shape, k_origin_dtype)
++
++    return output_q, output_k
+ 
+ 
+ def compute_default_rope_parameters(
+@@ -75,12 +135,13 @@ class Qwen3RMSNorm:
+         self,
+         model_path,
+         weight_map,
++        prefix,
+         name,
+         device,
+         dtype,
+         eps=1e-6,
+     ):
+-        self.weight = load_weight(model_path, weight_map, name, dtype, device)
++        self.weight = load_weight(model_path, weight_map, prefix, name, dtype, device)
+         self.variance_epsilon = eps
+ 
+     def forward(self, hidden_states):
+@@ -93,6 +154,10 @@ class Qwen3RMSNorm:
+                 hidden_states, self.weight, self.variance_epsilon
+             )
+             return hidden_states
++        elif hidden_states.device.type == "npu":
++            input_dtype = hidden_states.dtype
++            return torch_npu.npu_rms_norm(hidden_states.to(input_dtype),
++                                          self.weight, epsilon = self.variance_epsilon)[0]
+         else:
+             input_dtype = hidden_states.dtype
+             hidden_states = hidden_states.to(torch.float32)
+@@ -108,6 +173,7 @@ class Qwen3Attention:
+         self,
+         model_path,
+         weight_map,
++        prefix,
+         device,
+         dtype,
+         config: Qwen3Config,
+@@ -121,6 +187,7 @@ class Qwen3Attention:
+         self.q_proj_weight = load_weight(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.self_attn.q_proj.weight",
+             dtype,
+             device,
+@@ -128,6 +195,7 @@ class Qwen3Attention:
+         self.k_proj_weight = load_weight(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.self_attn.k_proj.weight",
+             dtype,
+             device,
+@@ -135,6 +203,7 @@ class Qwen3Attention:
+         self.v_proj_weight = load_weight(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.self_attn.v_proj.weight",
+             dtype,
+             device,
+@@ -142,6 +211,7 @@ class Qwen3Attention:
+         self.o_proj_weight = load_weight(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.self_attn.o_proj.weight",
+             dtype,
+             device,
+@@ -149,6 +219,7 @@ class Qwen3Attention:
+         self.q_norm = Qwen3RMSNorm(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.self_attn.q_norm.weight",
+             device,
+             dtype,
+@@ -157,32 +228,53 @@ class Qwen3Attention:
+         self.k_norm = Qwen3RMSNorm(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.self_attn.k_norm.weight",
+             device,
+             dtype,
+             eps=config.rms_norm_eps,
+         )
++        
++        self.layer_idx = layer_idx
+ 
+     def forward(
+         self, hidden_states, position_embeddings, cu_seqlens, max_s, attn_mask=None
+     ):
+         input_shape = hidden_states.shape[:-1]
+-        hidden_shape = (*input_shape, -1, self.head_dim)
+ 
+         q = self.q_norm.forward(
+-            F.linear(hidden_states, self.q_proj_weight).view(hidden_shape)
++            F.linear(hidden_states, self.q_proj_weight).view(*input_shape, self.num_heads, self.head_dim)
+         )
+         k = self.k_norm.forward(
+-            F.linear(hidden_states, self.k_proj_weight).view(hidden_shape)
++            F.linear(hidden_states, self.k_proj_weight).view(*input_shape, self.num_key_value_heads, self.head_dim)
+         )
+-        v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape)
++        v = F.linear(hidden_states, self.v_proj_weight).view(*input_shape, self.num_key_value_heads, self.head_dim)
+         cos, sin = position_embeddings
+-        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
++        # if self.layer_idx == 0:
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx q_origin.shape: {q.shape}")
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx k_origin.shape: {k.shape}")
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx cos.shape: {cos.shape}")
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx sin.shape: {sin.shape}")
++        q, k = apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1)
++
++        if self.num_key_value_groups > 1:
++            k = k.repeat_interleave(self.num_key_value_groups, dim=1)
++            v= v.repeat_interleave(self.num_key_value_groups, dim=1)
++           
++        # q= q.view(-1, self.num_heads, self.head_dim)
++        # k= k.view(-1, self.num_heads, self.head_dim)
++        # v= v.view(-1, self.num_heads, self.head_dim)
++        # attn_output = attn_output.view(-1, self.num_heads, self.head_dim)
++        # if self.layer_idx == 0:
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx q: {q.shape}")
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx k: {k.shape}")
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx v: {v.shape}")
+         attn_output = torch.empty_like(q)
+         attention(
+             q,
+             k,
+             v,
++            self.num_heads,
+             attn_output,
+             cu_seqlens,
+             max_s,
+@@ -190,6 +282,9 @@ class Qwen3Attention:
+             is_causal=True,
+             attn_mask=attn_mask,
+         )
++        # if self.layer_idx == 0:
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx attn_output.shape: {attn_output.shape}")
++        #     logger.info(f"xxxxxxxxxxxxxxxxxxx attn_output: {attn_output}")
+         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+         attn_output = F.linear(attn_output, self.o_proj_weight, bias=None)
+ 
+@@ -201,6 +296,7 @@ class Qwen3MLP:
+         self,
+         model_path,
+         weight_map,
++        prefix,
+         device,
+         dtype,
+         config: Qwen3Config,
+@@ -209,6 +305,7 @@ class Qwen3MLP:
+         self.gate_proj_weight = load_weight(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.mlp.gate_proj.weight",
+             dtype,
+             device,
+@@ -216,6 +313,7 @@ class Qwen3MLP:
+         self.up_proj_weight = load_weight(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.mlp.up_proj.weight",
+             dtype,
+             device,
+@@ -223,6 +321,7 @@ class Qwen3MLP:
+         self.down_proj_weight = load_weight(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.mlp.down_proj.weight",
+             dtype,
+             device,
+@@ -243,18 +342,20 @@ class Qwen3DecoderLayer:
+         self,
+         model_path,
+         weight_map,
++        prefix,
+         device,
+         dtype,
+         config: Qwen3Config,
+         layer_idx: Optional[int] = None,
+     ):
+         self.attention = Qwen3Attention(
+-            model_path, weight_map, device, dtype, config, layer_idx
++            model_path, weight_map, prefix, device, dtype, config, layer_idx
+         )
+-        self.mlp = Qwen3MLP(model_path, weight_map, device, dtype, config, layer_idx)
++        self.mlp = Qwen3MLP(model_path, weight_map, prefix, device, dtype, config, layer_idx)
+         self.input_layernorm = Qwen3RMSNorm(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.input_layernorm.weight",
+             device,
+             dtype,
+@@ -263,6 +364,7 @@ class Qwen3DecoderLayer:
+         self.post_attention_layernorm = Qwen3RMSNorm(
+             model_path,
+             weight_map,
++            prefix,
+             f"layers.{layer_idx}.post_attention_layernorm.weight",
+             device,
+             dtype,
+@@ -298,6 +400,9 @@ class Qwen3RotaryEmbedding(nn.Module):
+         self.register_buffer("inv_freq", inv_freq, persistent=False)
+ 
+     def forward(self, x, position_ids):
++        if position_ids.dim() == 1:
++            position_ids = position_ids.unsqueeze(0)
++        # inv_freq     [1, head_dim // 2]
+         inv_freq_expanded = (
+             self.inv_freq[None, :, None]
+             .float()
+@@ -330,10 +435,11 @@ class FlashQwen3Model:
+         config: MistralConfig
+     """
+ 
+-    def __init__(self, model_path, weight_map_json, device, dtype, config: Qwen3Config):
++    def __init__(self, model_path, weight_map, prefix, device, dtype, config: Qwen3Config):
+         self.word_embeddings_weight = load_weight(
+             model_path,
+-            weight_map_json["weight_map"],
++            weight_map,
++            prefix,
+             "embed_tokens.weight",
+             dtype,
+             device,
+@@ -341,7 +447,8 @@ class FlashQwen3Model:
+         self.layers = [
+             Qwen3DecoderLayer(
+                 model_path,
+-                weight_map_json["weight_map"],
++                weight_map,
++                prefix,
+                 device,
+                 dtype,
+                 config,
+@@ -352,7 +459,8 @@ class FlashQwen3Model:
+         self.rotary_emb = Qwen3RotaryEmbedding(config=config, device=device)
+         self.norm = Qwen3RMSNorm(
+             model_path,
+-            weight_map_json["weight_map"],
++            weight_map,
++            prefix,
+             f"norm.weight",
+             device,
+             dtype,
+@@ -370,6 +478,7 @@ class FlashQwen3Model:
+     ):
+         inputs_embeds = nn.functional.embedding(input_ids, self.word_embeddings_weight)
+         hidden_states = inputs_embeds
++        logger.info(f"xxxxxxxxxxxxxxxxxxx position_ids: {position_ids}")
+         position_embeddings = self.rotary_emb(hidden_states, position_ids)
+         for layer in self.layers:
+             hidden_states = layer.forward(
+@@ -379,26 +488,119 @@ class FlashQwen3Model:
+         return BaseModelOutputWithPast(last_hidden_state=hidden_states)
+ 
+ 
++class ForSequenceClassification(nn.Module):
++    def __init__(self, model_path, weight_map, prefix, device, dtype, config: Qwen3Config, tokenizer):
++        super().__init__()
++        self.config = config
++        self.tokenizer = tokenizer
++        self.model = FlashQwen3Model(model_path, weight_map, prefix,device, dtype, config)
++ 
++        self.word_embeddings_weight = load_weight(
++            model_path,
++            weight_map,
++            prefix,
++            "embed_tokens.weight",
++            dtype,
++            device,
++        )
++        
++        if hasattr(self.config, "max_seq_length"):
++            self.max_input_length = self.config.max_seq_length
++        else:
++            self.max_input_length = self.config.max_position_embeddings
++
++        prefix = "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n"
++        suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
++        self.prefix_tokens = self.tokenizer.encode(prefix, add_special_tokens=False)
++        self.suffix_tokens = self.tokenizer.encode(suffix, add_special_tokens=False)
++                    
++    def forward(
++        self,
++        input_ids,
++        position_ids,
++        cu_seqlens,
++        max_s,
++        mask=None,
++        attn_mask=None,
++    ):
++        # self.config.pad_token_id = self.tokenizer.pad_token_id
++        self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
++        self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
++      
++        input_ids_list = input_ids.tolist()
++        cu_seqlens_list = cu_seqlens.tolist()
++        input_ids_list_new = []
++        cu_seqlens_list_new = [0]
++        position_ids_list = []
++        
++        logger.info(f"xxxxxxxxxxxxxxxxxxx input_ids: {input_ids_list}")
++        logger.info(f"xxxxxxxxxxxxxxxxxxx position_ids: {position_ids}")
++        logger.info(f"xxxxxxxxxxxxxxxxxxx cu_seqlens: {cu_seqlens_list}")
++    
++        prev_end = 0
++        for end in cu_seqlens_list[1:]:
++            sequence = input_ids_list[prev_end:end]
++
++            new_sequence = self.prefix_tokens + sequence + self.suffix_tokens
++            input_ids_list_new.extend(new_sequence)
++
++            cu_seqlens_list_new.append(len(new_sequence))
++            position_ids_list.extend(range(len(new_sequence)))
++            prev_end = end
++
++        input_ids_list_new_tensor = torch.tensor(input_ids_list_new, device=input_ids.device)
++        cu_seqlens_list_new_tensor = torch.tensor(cu_seqlens_list_new, device=cu_seqlens.device)
++        position_ids_list_tensor = torch.tensor(position_ids_list, device=input_ids.device)
++        
++        output = self.model.forward(input_ids_list_new_tensor,
++                position_ids_list_tensor,
++                cu_seqlens_list_new_tensor,
++                max_s,
++                mask,
++                attn_mask)
++        
++        last_token_indices = cu_seqlens[1:] - 1
++        hidden_states = output.last_hidden_state
++ 
++        logits = F.linear(hidden_states[last_token_indices], self.word_embeddings_weight)
++
++        true_logits = logits[:, self.token_true_id]
++        false_logits = logits[:, self.token_false_id]
++        logit_diff = true_logits - false_logits
++        return logit_diff
++    
++    
+ class FlashQwen3(Model):
+     def __init__(
+         self,
+         model_path: Path,
+         device: torch.device,
+         dtype: torch.dtype,
+-        pool: str = "cls",
++        pool: str = "last",
+         trust_remote: bool = False,
+     ):
+         config = Qwen3Config.from_pretrained(model_path)
+-
++        tokenizer = AutoTokenizer.from_pretrained(model_path, padding_side="left")
+         if hasattr(config, "max_seq_length"):
+             self.max_input_length = config.max_seq_length
+         else:
+             self.max_input_length = config.max_position_embeddings
+ 
+-        with open(model_path / "model.safetensors.index.json", "r") as f:
+-            index_data = json.load(f)
+-
+-        model = FlashQwen3Model(model_path, index_data, device, dtype, config)
++        index_file = model_path / "model.safetensors.index.json"
++        if index_file.exists():
++            with open(index_file, "r") as f:
++                index_data = json.load(f)
++            weight_map = index_data["weight_map"]
++        else:
++            weight_map = None
++            
++        
++        with safe_open(model_path / "model.safetensors", framework="pt") as f:
++            if os.getenv("IS_RERANK", None):
++                model = ForSequenceClassification(model_path, weight_map, "model", device, dtype, config, tokenizer)
++            else:    
++                model = FlashQwen3Model(model_path, weight_map, "", device, dtype, config)
++                
+         self.hidden_size = config.hidden_size
+         self.pooling = DefaultPooling(self.hidden_size, pooling_mode=pool)
+         self.device = device
+@@ -444,7 +646,15 @@ class FlashQwen3(Model):
+             mask=mask,
+             attn_mask=attn_mask,
+         )
+-        embedding = self.pooling.forward(output, batch.attention_mask)
++        
++        last_token_indices = cu_seqlens[1:] - 1
++        hidden_states = output.last_hidden_state.cpu()
++        logger.info(f"xxxxxxxxxxxxxxxxxxx hidden_states: {hidden_states}")
++        logger.info(f"xxxxxxxxxxxxxxxxxxx hidden_states.shape: {hidden_states.shape}")
++        embedding = hidden_states[last_token_indices]
++        logger.info(f"cu_seqlens cu_seqlens: {cu_seqlens}")
++        logger.info(f"xxxxxxxxxxxxxxxxxxx embedding: {embedding}")
++        # embedding = self.pooling.forward(output, None)
+         cpu_results = embedding.view(-1).tolist()
+ 
+         return [
+@@ -453,3 +663,41 @@ class FlashQwen3(Model):
+             )
+             for i in range(len(batch))
+         ]
++        
++    @tracer.start_as_current_span("predict")
++    def predict(self, batch: Union[FlashBatch, PaddedBatch]) -> List[Score]:
++        if isinstance(batch, PaddedBatch):
++            input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
++            max_input_lens = 0  # This value will not be used
++            cu_seqlens = torch.cat(
++                (input_lens.new_tensor([0]), input_lens.cumsum(-1).int())
++            )
++            mask = batch.attention_mask.bool()
++            bsz, tgt_len = mask.size()
++            min_val = torch.finfo(self.dtype).min
++            attn_mask = torch.full(
++                [bsz, 1, tgt_len, tgt_len],
++                fill_value=min_val,
++                device=self.device,
++                dtype=self.dtype,
++            )
++            expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, tgt_len)
++            attn_mask = attn_mask.masked_fill(expanded_mask, 0.0)
++        elif isinstance(batch, FlashBatch):
++            cu_seqlens = batch.cu_seqlens
++            mask = None
++            attn_mask = None
++            max_input_lens = batch.max_s
++
++        logger.info(f"333333333333333333333 batch.input_ids: {batch.input_ids}")
++        logger.info(f"333333333333333333333 batch.position_ids: {batch.position_ids}")
++        logits = self.model.forward(
++            input_ids=batch.input_ids,
++            position_ids=batch.position_ids,
++            cu_seqlens=cu_seqlens,
++            max_s=max_input_lens,
++            mask=mask,
++            attn_mask=attn_mask,
++        )
++    
++        return [Score(values=[p.item()]) for p in logits]
+\ No newline at end of file
+diff --git a/backends/python/server/text_embeddings_server/models/flash_roberta.py b/backends/python/server/text_embeddings_server/models/flash_roberta.py
+new file mode 100644
+index 0000000..d4d87ca
+--- /dev/null
++++ b/backends/python/server/text_embeddings_server/models/flash_roberta.py
+@@ -0,0 +1,246 @@
++import json
++import torch
++import torch_npu
++from pathlib import Path
++from torch import nn
++import torch.nn.functional as F
++from typing import Type, List, Union
++from safetensors import safe_open
++from safetensors.torch import save_file
++from loguru import logger
++
++from transformers.models.roberta import RobertaConfig
++from transformers import AutoTokenizer
++from opentelemetry import trace
++from text_embeddings_server.models import Model
++
++from text_embeddings_server.models.flash_bert import (BertEncoder, 
++                                                      FastLayerNorm)
++
++from text_embeddings_server.models.types import FlashBatch, PaddedBatch, Embedding, Score
++
++
++tracer = trace.get_tracer(__name__)
++
++TOKEN_TYPE_SHIFT = 30
++
++class RobertaEmbeddings:
++    def __init__(self, prefix, handle, device, dtype, config: RobertaConfig):
++        self.config = config
++        self.word_embeddings_weight = (
++            handle.get_tensor(f"{prefix}.word_embeddings.weight").to(dtype).to(device)
++        )
++        self.token_type_embeddings_weight = (
++            handle.get_tensor(f"{prefix}.token_type_embeddings.weight")
++            .to(dtype)
++            .to(device)
++        )
++
++        if config.position_embedding_type == "absolute":
++            self.position_embeddings_weight = (
++                handle.get_tensor(f"{prefix}.position_embeddings.weight")
++                .to(dtype)
++                .to(device)
++            )
++        else:
++            raise NotImplementedError(
++                "FlashBert only supports absolute position embeddings"
++            )
++
++        self.layer_norm = FastLayerNorm(
++            f"{prefix}.LayerNorm", handle, device, dtype, config
++        )
++
++    def forward(self, input_ids, token_type_ids, position_ids):
++        inputs_embeds = nn.functional.embedding(input_ids, self.word_embeddings_weight)
++        token_type_embeds = nn.functional.embedding(
++            token_type_ids, self.token_type_embeddings_weight
++        )
++        position_embeds = nn.functional.embedding(
++            position_ids, self.position_embeddings_weight, padding_idx = self.config.pad_token_id
++        )
++
++        inputs_embeds += position_embeds
++        
++        embeddings, _ = self.layer_norm.forward(inputs_embeds, token_type_embeds)
++        return embeddings
++
++def replace_roberta_positions(
++    input_ids: torch.Tensor, position_ids: torch.Tensor, padding_idx: int
++) -> None:
++    position_ids += padding_idx + 1
++    
++
++def maybe_prefix(prefix: str, name: str) -> str:
++    return name if not prefix else prefix
++
++
++class FlashRobertaModel(nn.Module):
++    def __init__(self, handle, device, dtype, config: RobertaConfig, prefix: str = ""):
++        super().__init__()
++        _prefix = maybe_prefix(prefix, "roberta")
++        self.embeddings = RobertaEmbeddings(f"{_prefix}.embeddings", handle, device, dtype, config)
++        self.encoder = BertEncoder(f"{_prefix}.encoder", handle, device, dtype, config)
++        self.padding_idx: int = config.pad_token_id
++
++    def forward(
++        self,
++        input_ids,
++        token_type_ids,
++        position_ids,
++        cu_seqlens,
++        max_s,
++        mask=None,
++        attn_mask=None,
++    ):        
++        embeddings = self.embeddings.forward(input_ids, token_type_ids, position_ids)
++        encoder_outputs = self.encoder.forward(embeddings, cu_seqlens, max_s, attn_mask)
++        if mask is not None:
++            outputs = encoder_outputs[mask]
++            return outputs[cu_seqlens[:-1]]
++        return encoder_outputs[cu_seqlens[:-1]]
++    
++    
++class RobertaClassificationHead(nn.Module):
++    """Head for sentence-level classification tasks."""
++
++    def __init__(self, handle, device, dtype, model_config):
++        super().__init__()
++        config = model_config
++        
++        self.classifier_dense_weight = (
++            handle.get_tensor(f"classifier.dense.weight").to(dtype).to(device)
++        )
++        self.classifier_dense_bias = (
++            handle.get_tensor(f"classifier.dense.bias").to(dtype).to(device)
++        )
++           
++        self.classifier_out_proj_weight = (
++            handle.get_tensor(f"classifier.out_proj.weight").to(dtype).to(device)
++        )
++        self.classifier_out_proj_bias = (
++            handle.get_tensor(f"classifier.out_proj.bias").to(dtype).to(device)
++        )
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:
++        # CLSPool has already been applied in `pooling`
++        x = F.linear(
++            x, self.classifier_dense_weight, self.classifier_dense_bias
++        )
++        x = torch.tanh(x)
++        x = F.linear(
++            x, self.classifier_out_proj_weight, self.classifier_out_proj_bias
++        )
++        return x
++ 
++    
++class RobertaForSequenceClassification(nn.Module):
++    def __init__(self, handle, device, dtype, config: RobertaConfig, prefix: str = ""):
++        super().__init__()
++        self.config = config
++        
++        self.roberta = FlashRobertaModel(handle, device, dtype, config, prefix)
++        self.classifier = RobertaClassificationHead(handle, device, dtype, config)
++    
++    def forward(
++            self,
++            input_ids,
++            token_type_ids,
++            position_ids,
++            cu_seqlens,
++            max_s,
++            mask=None,
++            attn_mask=None,
++            ):
++
++        sequence_output = self.roberta(input_ids,
++            token_type_ids,
++            position_ids,
++            cu_seqlens,
++            max_s,
++            mask=None,
++            attn_mask=None)
++        logits =  self.classifier(sequence_output)
++        return logits
++
++
++class FlashRoberta(Model):
++    def __init__(
++        self,
++        model_path: Path,
++        device: torch.device,
++        dtype: torch.dtype,
++        pool: str = "cls",
++        trust_remote: bool = False,
++    ):
++        config = RobertaConfig.from_pretrained(model_path)
++
++        if hasattr(config, "max_seq_length"):
++            self.max_input_length = config.max_seq_length
++        else:
++            self.max_input_length = config.max_position_embeddings
++            
++        safe_weight_path = model_path / "model.safetensors"
++        bin_weight_path = model_path/"pytorch_model.bin"
++        if not safe_weight_path.exists() and not bin_weight_path.exists():
++            logger.error(f"pytorch_model.bin and model.safetensors do not exist")
++            raise FileNotFoundError(f"pytorch_model.bin and model.safetensors do not exist")
++        if not safe_weight_path.exists():
++            logger.info(f"model.safetensors does not exist, translate pytorch_model.bin to model.safetensors")
++            stat_dict = torch.load(bin_weight_path.as_posix(), map_loacation='cpu')
++            save_file(stat_dict, safe_weight_path.as_posix())
++            
++        with safe_open(model_path / "model.safetensors", framework="pt") as f:
++            model = RobertaForSequenceClassification(f, device, dtype, config, config.model_type)
++        self.device = device
++        self.dtype = dtype
++        self.hidden_size = config.hidden_size
++
++        super(FlashRoberta, self).__init__(model=model, dtype=dtype, device=device)
++
++    @property
++    def batch_type(self) -> Union[FlashBatch, PaddedBatch]:
++        # for hpu devices, we use PaddedBatch as we do not have real varlen fwd yet
++        return FlashBatch if self.device.type != "hpu" else PaddedBatch
++    
++    @tracer.start_as_current_span("embed")
++    def embed(self, batch: PaddedBatch) -> List[Embedding]:
++        pass
++    
++    @tracer.start_as_current_span("predict")
++    def predict(self, batch: Union[FlashBatch, PaddedBatch]) -> List[Score]:
++        if isinstance(batch, PaddedBatch):
++            input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
++            max_input_lens = 0  # This value will not be used
++            cu_seqlens = torch.cat(
++                (input_lens.new_tensor([0]), input_lens.cumsum(-1).int())
++            )
++            mask = batch.attention_mask.bool()
++            bsz, tgt_len = mask.size()
++            min_val = torch.finfo(self.dtype).min
++            attn_mask = torch.full(
++                [bsz, 1, tgt_len, tgt_len],
++                fill_value=min_val,
++                device=self.device,
++                dtype=self.dtype,
++            )
++            expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, tgt_len)
++            attn_mask = attn_mask.masked_fill(expanded_mask, 0.0)
++        elif isinstance(batch, FlashBatch):
++            cu_seqlens = batch.cu_seqlens
++            mask = None
++            attn_mask = None
++            max_input_lens = batch.max_s
++
++        logits = self.model.forward(
++            input_ids=batch.input_ids,
++            token_type_ids=batch.token_type_ids,
++            position_ids=batch.position_ids,
++            cu_seqlens=cu_seqlens,
++            max_s=max_input_lens,
++            mask=mask,
++            attn_mask=attn_mask,
++        )
++    
++        all_scores = logits.tolist()
++        return [Score(values=scores) for scores in all_scores]
+diff --git a/backends/python/server/text_embeddings_server/models/qwen3_rerank_model.py b/backends/python/server/text_embeddings_server/models/qwen3_rerank_model.py
+new file mode 100644
+index 0000000..72352a4
+--- /dev/null
++++ b/backends/python/server/text_embeddings_server/models/qwen3_rerank_model.py
+@@ -0,0 +1,96 @@
++import inspect
++import torch
++import os
++
++from pathlib import Path
++from typing import Type, List
++from transformers import AutoModelForSequenceClassification, Qwen3ForCausalLM, AutoTokenizer, AutoModelForCausalLM
++from opentelemetry import trace
++
++from text_embeddings_server.models import Model
++from text_embeddings_server.models.types import PaddedBatch, Embedding, Score
++
++tracer = trace.get_tracer(__name__)
++
++
++class Qwen3RerankModel(Model):
++    def __init__(
++        self,
++        model_path: Path,
++        device: torch.device,
++        dtype: torch.dtype,
++        pool: str = "cls",
++        trust_remote: bool = False,
++    ):
++
++        # Check environment variable to decide reranker mode
++        self.qwen3_mode = os.environ.get("IS_RERANK", "0") == "1"
++        position_offset = 0
++        # Load tokenizer (for both modes)
++        self.tokenizer = AutoTokenizer.from_pretrained(model_path, padding_side="left",
++                                                        trust_remote_code=trust_remote)
++        # Ϊ Qwen3 ģ������ pad_token ��֧�� batch ����
++        if self.tokenizer.pad_token is None:
++            self.tokenizer.pad_token = self.tokenizer.eos_token
++        # -------------------------------
++        #  Qwen3-Reranker ��ʼ���߼�
++        # -------------------------------
++        self.model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=trust_remote)
++        self.model = self.model.to(dtype).to(device).eval()
++        self.model.config.pad_token_id = self.tokenizer.pad_token_id
++        # ���ڴ� logits ��ȡ "yes" �� "no" �ĵ÷�
++        self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
++        self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
++        prefix = "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n"
++        suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
++        self.prefix_tokens = self.tokenizer.encode(prefix, add_special_tokens=False)
++        self.suffix_tokens = self.tokenizer.encode(suffix, add_special_tokens=False)
++
++        if hasattr(self.model.config, "max_seq_length"):
++            self.max_input_length = self.model.config.max_seq_length
++        else:
++            self.max_input_length = (
++                    self.model.config.max_position_embeddings - position_offset
++            )
++
++        super(Qwen3RerankModel, self).__init__(
++            model=self.model, dtype=dtype, device=device
++        )
++
++
++    @property
++    def batch_type(self) -> Type[PaddedBatch]:
++        return PaddedBatch
++
++    @tracer.start_as_current_span("embed")
++    def embed(self, batch: PaddedBatch) -> List[Embedding]:
++        pass
++
++    @tracer.start_as_current_span("predict")
++    def predict(self, batch: PaddedBatch) -> List[Score]:
++        kwargs = {"input_ids": batch.input_ids, "attention_mask": batch.attention_mask}
++       
++        input_ids = []
++        for ele in batch.input_ids:
++            ids = self.prefix_tokens + ele.tolist() + self.suffix_tokens
++            input_ids.append(ids)
++
++        tokenized = self.tokenizer.pad(
++            {"input_ids": input_ids},
++            padding=True,
++            return_tensors="pt",
++            max_length=self.max_input_length
++         )
++        inputs = {k: v.to(self.model.device) for k, v in tokenized.items()}
++
++        with torch.no_grad():
++            outputs = self.model(**inputs)
++            logits = outputs.logits[:, -1, :]  # ���һ�� token ��Ԥ��ֲ�
++
++            # ��ȡ "yes" �� "no" �ĸ��ʣ���Ϊ�Ƿ���ص��ж�
++            true_logits = logits[:, self.token_true_id]
++            false_logits = logits[:, self.token_false_id]
++            logit_diff = true_logits - false_logits
++        return [Score(values=[p.item()]) for p in logit_diff]
++
++
+diff --git a/backends/python/server/text_embeddings_server/models/types.py b/backends/python/server/text_embeddings_server/models/types.py
+index f27572a..0e392da 100644
+--- a/backends/python/server/text_embeddings_server/models/types.py
++++ b/backends/python/server/text_embeddings_server/models/types.py
+@@ -7,13 +7,13 @@ from dataclasses import dataclass
+ from opentelemetry import trace
+ 
+ from text_embeddings_server.pb import embed_pb2
+-from text_embeddings_server.pb.embed_pb2 import Embedding, Score
++from text_embeddings_server.pb.embed_pb2 import Embedding, Score, TokenEmbedding
+ 
+ tracer = trace.get_tracer(__name__)
+ PAD_SEQUENCE_TO_MULTIPLE_OF = int(os.environ.get("PAD_SEQUENCE_TO_MULTIPLE_OF", 128))
+ SEQ_LEN_EXPONENT_BASE = int(os.environ.get("SEQ_LEN_EXPONENT_BASE", 2))
+ 
+-
++from loguru import logger
+ def round_up_seq(number, k, base):
+     exponent = max(0, math.ceil(math.log(number / k, base)))
+     return int(k * (base**exponent))
+@@ -36,6 +36,7 @@ class PaddedBatch(Batch):
+     token_type_ids: torch.Tensor
+     position_ids: torch.Tensor
+     attention_mask: torch.Tensor
++    max_length: int
+ 
+     @classmethod
+     @tracer.start_as_current_span("from_pb")
+@@ -82,6 +83,7 @@ class PaddedBatch(Batch):
+             token_type_ids=all_tensors[1],
+             position_ids=all_tensors[2],
+             attention_mask=all_tensors[3],
++            max_length=max_length,
+         )
+ 
+     def __len__(self):
+@@ -104,6 +106,7 @@ class FlashBatch(Batch):
+         cls, pb: embed_pb2.EmbedRequest, device: torch.device, max_input_length: int
+     ) -> "FlashBatch":
+         batch_input_ids = torch.tensor(pb.input_ids, dtype=torch.int32, device=device)
++        logger.info(f"xxxxxxxxxxxxxxxxxxx input_ids.shape: {batch_input_ids}")
+         batch_token_type_ids = torch.tensor(
+             pb.token_type_ids, dtype=torch.int32, device=device
+         )
+@@ -111,7 +114,8 @@ class FlashBatch(Batch):
+             pb.position_ids, dtype=torch.int32, device=device
+         )
+ 
+-        cu_seqlens = torch.tensor(pb.cu_seq_lengths, dtype=torch.int32, device=device)
++        cu_seqlens = torch.tensor(pb.cu_seq_lengths, dtype=torch.int32, device="cpu")
++        #cu_seqlens = pb.cu_seq_lengths
+ 
+         return FlashBatch(
+             input_ids=batch_input_ids,
+diff --git a/backends/python/server/text_embeddings_server/models/unixcoder_model.py b/backends/python/server/text_embeddings_server/models/unixcoder_model.py
+new file mode 100644
+index 0000000..ea95871
+--- /dev/null
++++ b/backends/python/server/text_embeddings_server/models/unixcoder_model.py
+@@ -0,0 +1,88 @@
++import os
++import inspect
++import torch
++
++from pathlib import Path
++from typing import Type, List
++from transformers import RobertaModel, RobertaConfig, RobertaTokenizer
++from opentelemetry import trace
++
++from collections import defaultdict
++import numpy as np
++from loguru import logger
++
++from text_embeddings_server.models.pooling import DefaultPooling
++
++from text_embeddings_server.models import Model
++from text_embeddings_server.models.types import PaddedBatch, Embedding, Score, TokenEmbedding
++
++tracer = trace.get_tracer(__name__)
++
++is_unixcode = os.getenv("IS_UNIXCODE", None)
++
++class UniXcoderModel(Model):
++    def __init__(
++        self,
++        model_path: Path,
++        device: torch.device,
++        dtype: torch.dtype,
++        pool: str,
++        trust_remote: bool = False,
++    ):
++        self.config = RobertaConfig.from_pretrained(model_path)
++        self.config.is_decoder = True
++        model = (
++            RobertaModel.from_pretrained(model_path, config=self.config)
++            .to(dtype)
++            .to(device)
++            .eval()
++        )
++
++        self.hidden_size = model.config.hidden_size 
++
++        position_offset = 0
++        model_type = model.config.model_type
++        if model_type in ["xlm-roberta", "camembert", "roberta"]:
++            position_offset = model.config.pad_token_id + 1
++        if hasattr(model.config, "max_seq_length"):
++            self.max_input_length = model.config.max_seq_length
++        else:
++            self.max_input_length = (
++                model.config.max_position_embeddings - position_offset
++            )
++
++        self.tokenizer = RobertaTokenizer.from_pretrained(model_path, local_files_only=True)
++                
++        super(UniXcoderModel, self).__init__(model=model, dtype=dtype, device=device)
++
++    @property
++    def batch_type(self) -> Type[PaddedBatch]:
++        return PaddedBatch
++
++    @tracer.start_as_current_span("embed")
++    def embed(self, batch: PaddedBatch) -> List[Embedding]:
++        kwargs = {"input_ids": batch.input_ids, "attention_mask": batch.attention_mask}
++        return self._process_unixcode(batch, kwargs)
++
++    def _process_unixcode(self, batch: PaddedBatch, kwargs: dict):
++        tokens_ids = []
++        mode = "<encoder-only>"
++        mode_id = self.tokenizer.convert_tokens_to_ids(mode)
++        for tokens_id in batch.input_ids:
++            tokens_id = tokens_id[:self.max_input_length - 4]
++            tokens_id = tokens_id.tolist()[1:-1]
++            tokens_id = [self.tokenizer.cls_token_id, mode_id, self.tokenizer.sep_token_id] + tokens_id + [self.tokenizer.sep_token_id]
++
++            tokens_ids.append(tokens_id)
++        tokens_ids = torch.tensor(tokens_ids).to(self.device)
++        mask = tokens_ids.ne(self.config.pad_token_id)
++        attention_mask=mask.unsqueeze(1) * mask.unsqueeze(2).to(self.device)
++        token_embeddings = self.model(tokens_ids, attention_mask=attention_mask)[0]
++        sentence_embeddings = (token_embeddings * mask.unsqueeze(-1)).sum(1) / mask.sum(-1).unsqueeze(-1)
++        return [
++            Embedding(
++                values=sentence_embeddings[i]
++            )
++            for i in range(len(batch))
++        ]
++
+diff --git a/backends/python/server/text_embeddings_server/server.py b/backends/python/server/text_embeddings_server/server.py
+index 646d79b..da8f6a1 100644
+--- a/backends/python/server/text_embeddings_server/server.py
++++ b/backends/python/server/text_embeddings_server/server.py
+@@ -1,5 +1,8 @@
+ import asyncio
+ import torch
++import torch_npu
++import os
++
+ from grpc import aio
+ from loguru import logger
+ 
+@@ -13,6 +16,9 @@ from text_embeddings_server.utils.tracing import UDSOpenTelemetryAioServerInterc
+ from text_embeddings_server.utils.interceptor import ExceptionInterceptor
+ 
+ 
++clean_npu_cache = os.getenv("CLEAN_NPU_CACHE", "False")
++
++
+ class EmbeddingService(embed_pb2_grpc.EmbeddingServiceServicer):
+     def __init__(self, model: Model):
+         self.model = model
+@@ -31,9 +37,22 @@ class EmbeddingService(embed_pb2_grpc.EmbeddingServiceServicer):
+         )
+ 
+         embeddings = self.model.embed(batch)
++        if clean_npu_cache == "True":
++            torch_npu.npu.empty_cache()
+ 
+         return embed_pb2.EmbedResponse(embeddings=embeddings)
+ 
++    async def Embed_all(self, request, context):
++        max_input_length = self.model.max_input_length
++        batch = self.model.batch_type.from_pb(request, self.model.device, max_input_length)
++
++        embeddings = self.model.embed_all(batch)
++        
++        if clean_npu_cache == "True":
++            torch_npu.npu.empty_cache()
++            
++        return embed_pb2.RawEmbedResponse(allembeddings=embeddings)
++    
+     async def Predict(self, request, context):
+         max_input_length = self.model.max_input_length
+         batch = self.model.batch_type.from_pb(
+@@ -42,6 +61,9 @@ class EmbeddingService(embed_pb2_grpc.EmbeddingServiceServicer):
+ 
+         scores = self.model.predict(batch)
+ 
++        if clean_npu_cache == "True":
++            torch_npu.npu.empty_cache()
++            
+         return embed_pb2.PredictResponse(scores=scores)
+ 
+ 
+@@ -67,6 +89,10 @@ def serve(
+             interceptors=[
+                 ExceptionInterceptor(),
+                 UDSOpenTelemetryAioServerInterceptor(),
++            ],
++            options = [
++                ('grpc_max_send_message_length', 100 * 1024 * 1024),
++                ('grpc_max_recieve_message_length', 100 * 1024 * 1024),
+             ]
+         )
+         embed_pb2_grpc.add_EmbeddingServiceServicer_to_server(
+diff --git a/backends/python/server/text_embeddings_server/test.py b/backends/python/server/text_embeddings_server/test.py
+new file mode 100644
+index 0000000..e22589c
+--- /dev/null
++++ b/backends/python/server/text_embeddings_server/test.py
+@@ -0,0 +1,97 @@
++from loguru import logger
++import torch
++import torch_npu
++from pathlib import Path
++from transformers import AutoModelForSequenceClassification,AutoTokenizer, AutoConfig
++from text_embeddings_server.models.flash_roberta import FlashRoberta
++from text_embeddings_server.models.types import FlashBatch, PaddedBatch, Embedding, Score
++
++    
++def calc_softmax(scores):
++    scores_tensor = torch.tensor(scores, dtype=torch.float)
++    if len(scores) > 1:
++        return torch.softmax(scores_tensor, dim=0).tolist()
++    else:
++        return torch.sigmoid(scores_tensor).tolist()
++        
++
++def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0):
++    """
++    Replace non-padding symbols with their position numbers. Position numbers begin at padding_idx+1. Padding symbols
++    are ignored. This is modified from fairseq's `utils.make_positions`.
++
++    Args:
++        x: torch.Tensor x:
++
++    Returns: torch.Tensor
++    """
++    # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
++    mask = input_ids.ne(padding_idx).int()
++    incremental_indices = (torch.cumsum(mask, dim=0).type_as(mask) + past_key_values_length) * mask
++    return incremental_indices.long() + padding_idx
++    
++    
++if __name__ == "__main__":
++    device_id = 0
++
++    device = torch.device(f"npu:{device_id}")
++    torch_npu.npu.set_device(f"npu:{device_id}")
++
++    model_path = "/home/HwHiAiUser/model/bge-reranker-large"
++    tokenizer = AutoTokenizer.from_pretrained(model_path)
++    config = AutoConfig.from_pretrained(model_path)
++    model = FlashRoberta(Path(model_path), device, torch.float16)
++    
++    query = "What is Deep Learning?"
++    # docs  = ["Deep learning is a subset of machine learning that uses multi-layered artificial neural networks to learn complex patterns from large datasets. Inspired by the human brain, these models automatically extract features from raw data, enabling end-to-end learning without manual feature engineering.",
++    #          "A deep neural network consists of an input layer, multiple hidden layers applying nonlinear transformations, and an output layer producing predictions. Training involves forward propagation to compute outputs and backpropagation with gradient descent to adjust weights and biases, minimizing prediction error."]
++    docs = ["Deep Learning is not...", "Deep learning is..."]
++    # docs = ["Deep learning is a subset of machine learning", "A deep neural network consists of an input layer"]
++    sentence_pairs = [[query, doc] for  doc in docs]
++    
++    cu_seq_lengths = []
++    cu_seq_lengths.append(0)
++    
++    sum = 0
++    max_length = 0
++    all_input_ids = []
++    all_position_ids=[]
++    for sentence_pair in sentence_pairs:
++        encode_pairs = tokenizer([sentence_pair], padding=True, truncation=True, max_length=512)
++        input_ids = encode_pairs['input_ids']
++        logger.info(f"--------------input_ids:{input_ids}")
++        sum += len(input_ids[0])
++        cu_seq_lengths.append(sum)
++        all_input_ids.extend(input_ids[0])
++        
++        input_ids_tensor = torch.tensor(input_ids[0], dtype=torch.int32)
++        position_ids = create_position_ids_from_input_ids(input_ids_tensor, config.pad_token_id).to(torch.int32).tolist()
++        all_position_ids.extend(position_ids)
++        
++    logger.info(f"-------------input_ids:{all_input_ids}")
++    input_ids_tensor = torch.tensor(all_input_ids, dtype=torch.int32)
++    batch_input_ids = torch.tensor(all_input_ids, dtype=torch.int32, device=device)
++    batch_token_type_ids = torch.zeros_like(input_ids_tensor, dtype=torch.int32, device=device)
++    batch_position_ids = torch.tensor(all_position_ids, dtype=torch.int32, device=device)
++    cu_seqlens = torch.tensor(cu_seq_lengths, dtype=torch.int32, device="cpu")
++
++    logger.info(f"-------------------batch_position_ids:{all_position_ids}")
++
++    flashBatch = FlashBatch(
++            input_ids=batch_input_ids,
++            token_type_ids=batch_token_type_ids,
++            position_ids=batch_position_ids,
++            cu_seqlens=cu_seqlens,
++            max_s=max_length,
++            size=len(cu_seqlens) - 1,
++        )
++    
++    res=model.predict(flashBatch)
++    
++    values = [r.values[0] for r in res]
++    logger.info(f"000000000000 res:{values}")
++    # logger.info(f"000000000000 res:{res}")
++    s = calc_softmax(values)
++
++    logger.info(f"000000000000 res:{s}")
++    
+\ No newline at end of file
+diff --git a/backends/python/server/text_embeddings_server/test_emb.py b/backends/python/server/text_embeddings_server/test_emb.py
+new file mode 100644
+index 0000000..26ea199
+--- /dev/null
++++ b/backends/python/server/text_embeddings_server/test_emb.py
+@@ -0,0 +1,78 @@
++from loguru import logger
++import torch
++import torch_npu
++from pathlib import Path
++from transformers import AutoTokenizer, AutoConfig
++from text_embeddings_server.models.flash_bert import FlashBert
++from text_embeddings_server.models.types import FlashBatch, PaddedBatch, Embedding, Score
++
++    
++def create_position_ids_from_input_ids(input_ids, max_position_embeddings, past_key_values_length=0):
++    position_ids_tmp = torch.arange(max_position_embeddings)
++    seq_length = input_ids.size()[-1]
++    position_ids = position_ids_tmp[past_key_values_length : seq_length + past_key_values_length]
++    return position_ids
++    
++    
++if __name__ == "__main__":
++    device_id = 0
++
++    device = torch.device(f"npu:{device_id}")
++    torch_npu.npu.set_device(f"npu:{device_id}")
++
++    model_path = "/home/HwHiAiUser/model/bge-large-zh-v1.5/"
++    tokenizer = AutoTokenizer.from_pretrained(model_path)
++    config = AutoConfig.from_pretrained(model_path)
++    model = FlashBert(Path(model_path), device, torch.float16)
++    
++    # docs  = ["Deep learning is a subset of machine learning that uses multi-layered artificial neural networks to learn complex patterns from large datasets. Inspired by the human brain, these models automatically extract features from raw data, enabling end-to-end learning without manual feature engineering.",
++    #          "A deep neural network consists of an input layer, multiple hidden layers applying nonlinear transformations, and an output layer producing predictions. Training involves forward propagation to compute outputs and backpropagation with gradient descent to adjust weights and biases, minimizing prediction error."]
++    docs = ["Deep Learning is not...", "Deep learning is..."]
++ 
++    
++    cu_seq_lengths = []
++    cu_seq_lengths.append(0)
++    
++    sum = 0
++    max_length = 0
++    all_input_ids = []
++    all_position_ids=[]
++    for doc in docs:
++        encode_pairs = tokenizer([doc], padding=True, truncation=True, max_length=512)
++        input_ids = encode_pairs['input_ids']
++        logger.info(f"--------------input_ids:{input_ids}")
++        sum += len(input_ids[0])
++        cu_seq_lengths.append(sum)
++        all_input_ids.extend(input_ids[0])
++        
++        input_ids_tensor = torch.tensor(input_ids[0], dtype=torch.int32)
++        position_ids = create_position_ids_from_input_ids(input_ids_tensor, config.max_position_embeddings).tolist()
++        all_position_ids.extend(position_ids)
++        
++    logger.info(f"-------------input_ids:{all_input_ids}")
++    logger.info(f"-------------input_ids:{all_position_ids}")
++       
++    input_ids_tensor = torch.tensor(all_input_ids, dtype=torch.int32)
++    batch_input_ids = torch.tensor(all_input_ids, dtype=torch.int32, device=device)
++    batch_token_type_ids = torch.zeros_like(input_ids_tensor, dtype=torch.int32, device=device)
++    batch_position_ids = torch.tensor(all_position_ids, dtype=torch.int32, device=device)
++    cu_seqlens = torch.tensor(cu_seq_lengths, dtype=torch.int32, device="cpu")
++
++    logger.info(f"-------------------batch_position_ids:{all_position_ids}")
++
++    flashBatch = FlashBatch(
++            input_ids=batch_input_ids,
++            token_type_ids=batch_token_type_ids,
++            position_ids=batch_position_ids,
++            cu_seqlens=cu_seqlens,
++            max_s=max_length,
++            size=len(cu_seqlens) - 1,
++        )
++    
++    res=model.embed(flashBatch)
++    
++    values = [r.values for r in res]
++    logger.info(f"000000000000 res:{values}")
++    # logger.info(f"000000000000 res:{res}")
++
++    
+\ No newline at end of file
+diff --git a/backends/python/server/text_embeddings_server/utils/device.py b/backends/python/server/text_embeddings_server/utils/device.py
+index 3f3b04d..af19793 100644
+--- a/backends/python/server/text_embeddings_server/utils/device.py
++++ b/backends/python/server/text_embeddings_server/utils/device.py
+@@ -50,6 +50,14 @@ def is_hpu() -> bool:
+     return is_hpu_available
+ 
+ 
++def is_npu() -> bool:
++    is_npu_available = False
++    if torch.npu.is_available():
++        is_npu_available = True
++
++    return is_npu_available
++
++
+ def use_ipex() -> bool:
+     value = os.environ.get("USE_IPEX", "True").lower()
+     return value in ["true", "1"] and _is_ipex_available()
+@@ -59,6 +67,18 @@ def get_device():
+     device = torch.device("cpu")
+     if torch.cuda.is_available():
+         device = torch.device("cuda")
++        
++    elif is_npu():
++        # torch.npu.config.allow_internal_format=False
++        # torch.ops.load_library("/home/wangyongjun/build/libtorch_binding.so")
++        
++        device = torch.device("npu")
++        torch.npu.set_compile_mode(jit_compile=False)
++        option = {"NPU_FUZZY_COMPILE_BLACKLIST": "ReduceProd"}
++        torch.npu.set_option(option)
++        deviceIdx = os.environ.get('TEI_NPU_DEVICE')
++        if deviceIdx != None and deviceIdx.isdigit() and int(deviceIdx) >= 0 and int(deviceIdx) <= 7:
++            torch.npu.set_device(torch.device(f"npu:{deviceIdx}"))
+     elif is_hpu():
+         import habana_frameworks.torch.core as htcore
+ 
+diff --git a/backends/python/server/text_embeddings_server/utils/flash_attn.py b/backends/python/server/text_embeddings_server/utils/flash_attn.py
+index 1ca5e02..4162a97 100644
+--- a/backends/python/server/text_embeddings_server/utils/flash_attn.py
++++ b/backends/python/server/text_embeddings_server/utils/flash_attn.py
+@@ -1,9 +1,10 @@
+ import os
+ 
+ import torch
++import torch_npu
+ from loguru import logger
+ 
+-from text_embeddings_server.utils.device import is_hpu, use_ipex
++from text_embeddings_server.utils.device import is_hpu, use_ipex, is_npu
+ 
+ if os.getenv("USE_FLASH_ATTENTION", "").lower() == "false":
+     raise ImportError("`USE_FLASH_ATTENTION` is false.")
+@@ -13,8 +14,11 @@ HAS_FLASH_ATTN_V2 = False
+ 
+ is_hpu = is_hpu()
+ use_ipex = use_ipex()
++is_npu = is_npu()
+ 
+-if use_ipex or is_hpu:
++if is_npu:
++    HAS_FLASH_ATTN = True
++elif use_ipex or is_hpu:
+     HAS_FLASH_ATTN_V2 = True
+ else:
+     if not torch.cuda.is_available():
+@@ -86,9 +90,52 @@ def hpu_attn(
+     out.copy_(out_)
+     return out
+ 
++def npu_attn(
++    q,
++    k,
++    v,
++    num_heads,
++    out,
++    attn_mask,
++    seqlen_q,
++    seqlen_k,
++    max_seqlen_q,
++    max_seqlen_k,
++    softmax_scale,
++    is_causal=False,
++    ):
++    if is_causal:
++        attn_mask_npu = torch.triu(torch.ones((2048, 2048), dtype=torch.bool, device=q.device), diagonal=1)
++        out_ = torch_npu.npu_fusion_attention(
++                query=q,
++                key=k,
++                value=v,
++                head_num=num_heads,
++                input_layout="TND",
++                scale=softmax_scale,
++                actual_seq_qlen=seqlen_q.tolist(),
++                actual_seq_kvlen=seqlen_k.tolist(),
++                sparse_mode=3,
++                atten_mask=attn_mask_npu
++            )[0]
++    else:
++        out_ = torch_npu.npu_fusion_attention(
++                    query=q,
++                    key=k,
++                    value=v,
++                    head_num=num_heads,
++                    input_layout="TND",
++                    scale=softmax_scale,
++                    actual_seq_qlen=seqlen_q.tolist(),
++                    actual_seq_kvlen=seqlen_k.tolist(),
++                )[0]
++   
++    out.copy_(out_)
++    return out
++
+ 
+ def attention(
+-    q, k, v, out, cu_seqlens, max_s, softmax_scale, is_causal=False, attn_mask=None
++    q, k, v, num_heads, out, cu_seqlens, max_s, softmax_scale, is_causal=False, attn_mask=None
+ ):
+     if HAS_FLASH_ATTN_V2:
+         if use_ipex:
+@@ -110,7 +157,7 @@ def attention(
+                 is_causal=False,
+                 return_softmax=False,
+                 gen_=None,
+-            )
++                )
+ 
+         elif is_hpu:
+             return hpu_attn(
+@@ -148,22 +195,39 @@ def attention(
+             )
+ 
+     if HAS_FLASH_ATTN:
+-        return flash_attn_cuda.fwd(
+-            q,
+-            k,
+-            v,
+-            out,
+-            cu_seqlens,
+-            cu_seqlens,
+-            max_s,
+-            max_s,
+-            0.0,
+-            softmax_scale,
+-            False,
+-            is_causal,
+-            False,
+-            0,
+-            None,
+-        )
++        if is_npu:
++            return npu_attn(
++                q,
++                k,
++                v,
++                num_heads,
++                out,
++                attn_mask,
++                cu_seqlens,
++                cu_seqlens,
++                max_s,
++                max_s,
++                softmax_scale,
++                is_causal,
++                )
++            
++        else:   
++            return flash_attn_cuda.fwd(
++                q,
++                k,
++                v,
++                out,
++                cu_seqlens,
++                cu_seqlens,
++                max_s,
++                max_s,
++                0.0,
++                softmax_scale,
++                False,
++                is_causal,
++                False,
++                0,
++                None,
++            )
+ 
+     raise NotImplementedError("flash attention is not installed")
+diff --git a/backends/python/src/lib.rs b/backends/python/src/lib.rs
+index 53255b0..4d24016 100644
+--- a/backends/python/src/lib.rs
++++ b/backends/python/src/lib.rs
+@@ -73,31 +73,53 @@ impl Backend for PythonBackend {
+     }
+ 
+     fn embed(&self, batch: Batch) -> Result<Embeddings, BackendError> {
+-        if !batch.raw_indices.is_empty() {
+-            return Err(BackendError::Inference(
+-                "raw embeddings are not supported for the Python backend.".to_string(),
+-            ));
+-        }
+         let batch_size = batch.len();
+ 
+-        let results = self
+-            .tokio_runtime
+-            .block_on(self.backend_client.clone().embed(
+-                batch.input_ids,
+-                batch.token_type_ids,
+-                batch.position_ids,
+-                batch.cumulative_seq_lengths,
+-                batch.max_length,
+-            ))
+-            .map_err(|err| BackendError::Inference(err.to_string()))?;
+-        let pooled_embeddings: Vec<Vec<f32>> = results.into_iter().map(|r| r.values).collect();
+-
+         let mut embeddings =
+             HashMap::with_capacity_and_hasher(batch_size, BuildNoHashHasher::default());
+-        for (i, e) in pooled_embeddings.into_iter().enumerate() {
+-            embeddings.insert(i, Embedding::Pooled(e));
+-        }
+ 
++        if !batch.pooled_indices.is_empty() {
++            let results = self
++                .tokio_runtime
++                .block_on(self.backend_client.clone().embed(
++                    batch.input_ids,
++                    batch.token_type_ids,
++                    batch.position_ids,
++                    batch.cumulative_seq_lengths,
++                    batch.max_length,
++                ))
++                .map_err(|err| BackendError::Inference(err.to_string()))?;
++
++            let pooled_embeddings: Vec<Vec<f32>> = results.into_iter().map(|r| r.values).collect();
++            for (i, e) in pooled_embeddings.into_iter().enumerate() {
++                embeddings.insert(i, Embedding::Pooled(e));
++            }
++        }
++        else if !batch.raw_indices.is_empty() {
++            let results = self
++                .tokio_runtime
++                .block_on(self.backend_client.clone().embed_all(
++                    batch.input_ids,
++                    batch.token_type_ids,
++                    batch.position_ids,
++                    batch.cumulative_seq_lengths,
++                    batch.max_length,
++                ))
++                .map_err(|err| BackendError::Inference(err.to_string()))?;
++            
++            let mut raw_embeddings = Vec::new();
++            for token_embedding in results {
++                let mut two_dim_list = Vec::new();
++                for embeddings in token_embedding.embeddings {
++                    let values = embeddings.values.clone();
++                    two_dim_list.push(values);
++                }
++                raw_embeddings.push(two_dim_list);
++            }
++            for (i, e) in raw_embeddings.into_iter().enumerate() {
++                embeddings.insert(i, Embedding::All(e));
++            }
++        }
+         Ok(embeddings)
+     }
+ 
+diff --git a/backends/src/dtype.rs b/backends/src/dtype.rs
+index 80292be..253f322 100644
+--- a/backends/src/dtype.rs
++++ b/backends/src/dtype.rs
+@@ -53,7 +53,7 @@ impl Default for DType {
+         }
+         #[cfg(feature = "python")]
+         {
+-            DType::Bfloat16
++            DType::Float16
+         }
+     }
+ }
+diff --git a/core/src/queue.rs b/core/src/queue.rs
+index 3fd8b77..61b38dc 100644
+--- a/core/src/queue.rs
++++ b/core/src/queue.rs
+@@ -153,6 +153,7 @@ fn queue_blocking_task(
+                     };
+ 
+                     if total_tokens > max_batch_tokens {
++                        tracing::info!("split new batch because cur up to max_batch_tokens:{max_batch_tokens:?}");
+                         entries.push_front(entry);
+                         break;
+                     }
+@@ -174,7 +175,8 @@ fn queue_blocking_task(
+ 
+                     entry_index += 1;
+ 
+-                    if Some(metadata.len()) == max_batch_requests {
++                    if Some(metadata.len()) == Some(capacity) {
++                        tracing::info!("split new batch because cur up to:{capacity:?}");
+                         break;
+                     }
+                 }
+@@ -183,6 +185,7 @@ fn queue_blocking_task(
+                 let next_batch = if metadata.is_empty() {
+                     None
+                 } else {
++                    tracing::info!("inference batch size is:{batch_size:?}");
+                     Some((
+                         metadata,
+                         Batch {
+diff --git a/core/src/tokenization.rs b/core/src/tokenization.rs
+index 3639b98..e571d7a 100644
+--- a/core/src/tokenization.rs
++++ b/core/src/tokenization.rs
+@@ -293,7 +293,7 @@ fn tokenize_input(
+     prompts: Option<&HashMap<String, String>>,
+     tokenizer: &mut Tokenizer,
+ ) -> Result<(Option<String>, RawEncoding), TextEmbeddingsError> {
+-    let pre_prompt = prepare_pre_prompt(default_prompt, prompt_name, prompts)?;
++    let pre_prompt = prepare_pre_prompt(default_prompt.clone(), prompt_name, prompts)?;
+ 
+     let input_chars = inputs.count_chars();
+     let limit = max_input_length * MAX_CHAR_MULTIPLIER;
+@@ -322,20 +322,41 @@ fn tokenize_input(
+ 
+             (Some(s), encoding)
+         }
++
+         EncodingInput::Dual(s1, s2) => {
+-            if pre_prompt.is_some() {
++            let is_rerank = std::env::var("IS_RERANK").ok().as_deref() == Some("1");
++        
++            if is_rerank {
++                let default_prompt = default_prompt.ok_or_else(|| {
++                    TextEmbeddingsError::Validation(
++                        "In rerank mode, `--default-prompt` must be set.".to_string(),
++                    )
++                })?;
++        
++                let prompt = default_prompt
++                    .replace("\\n", "\n")
++                    .replace("<s1>", &s1)
++                    .replace("<s2>", &s2);
++        
++                let encoding = tokenizer
++                    .with_truncation(truncate_params)?
++                    .encode::<&str>(&prompt, add_special_tokens)?;
++        
++                (Some(prompt), encoding)
++            } else if pre_prompt.is_some() {
+                 return Err(TextEmbeddingsError::Validation(
+                     "`prompt_name` cannot be set with dual inputs".to_string(),
+                 ));
++            } else {
++                (
++                    None,
++                    tokenizer
++                        .with_truncation(truncate_params)?
++                        .encode::<(String, String)>((s1, s2), add_special_tokens)?,
++                )
+             }
+-
+-            (
+-                None,
+-                tokenizer
+-                    .with_truncation(truncate_params)?
+-                    .encode::<(String, String)>((s1, s2), add_special_tokens)?,
+-            )
+         }
++
+         // input is encoded -> convert to tokenizers Encoding
+         EncodingInput::Ids(ids) => {
+             if let Some(mut pre_prompt) = pre_prompt {
+diff --git a/router/src/http/server.rs b/router/src/http/server.rs
+index a22af96..339a5e1 100644
+--- a/router/src/http/server.rs
++++ b/router/src/http/server.rs
+@@ -7,7 +7,7 @@ use crate::http::types::{
+     RerankRequest, RerankResponse, Sequence, SimilarityInput, SimilarityParameters,
+     SimilarityRequest, SimilarityResponse, SimpleToken, SparseValue, TokenizeInput,
+     TokenizeRequest, TokenizeResponse, TruncationDirection, VertexPrediction, VertexRequest,
+-    VertexResponse,
++    VertexResponse, OpenAICompatRerankRequest, OpenAICompatRerankResponse, OpenAIRank, DocumentWrapper
+ };
+ use crate::{
+     logging, shutdown, ClassifierModel, EmbeddingModel, ErrorResponse, ErrorType, Info, ModelType,
+@@ -1301,6 +1301,207 @@ async fn openai_embed(
+     Ok((headers, Json(response)))
+ }
+ 
++
++/// Get Ranks. Returns a 424 status code if the model is not a Sequence Classification model with
++/// a single class.
++#[utoipa::path(
++    post,
++    tag = "Text Embeddings Inference",
++    path = "/v1/rerank",
++    request_body = OpenAICompatRerankRequest,
++    responses(
++    (status = 200, description = "Ranks", body = OpenAICompatRerankResponse),
++    (status = 424, description = "Rerank Error", body = ErrorResponse,
++    example = json ! ({"error": "Inference failed", "error_type": "backend"})),
++    (status = 429, description = "Model is overloaded", body = ErrorResponse,
++    example = json ! ({"error": "Model is overloaded", "error_type": "overloaded"})),
++    (status = 422, description = "Tokenization error", body = ErrorResponse,
++    example = json ! ({"error": "Tokenization error", "error_type": "tokenizer"})),
++    (status = 400, description = "Batch is empty", body = ErrorResponse,
++    example = json ! ({"error": "Batch is empty", "error_type": "empty"})),
++    (status = 413, description = "Batch size error", body = ErrorResponse,
++    example = json ! ({"error": "Batch size error", "error_type": "validation"})),
++    )
++    )]
++    #[instrument(
++        skip_all,
++        fields(total_time, tokenization_time, queue_time, inference_time,)
++    )]
++    async fn openai_rerank(
++        infer: Extension<Infer>,
++        info: Extension<Info>,
++        Extension(context): Extension<Option<opentelemetry::Context>>,
++        Json(req): Json<OpenAICompatRerankRequest>,
++    ) -> Result<(HeaderMap, Json<OpenAICompatRerankResponse>), (StatusCode, Json<ErrorResponse>)> {
++        let span = tracing::Span::current();
++        if let Some(context) = context {
++            span.set_parent(context);
++        }
++    
++        let start_time = Instant::now();
++    
++        if req.documents.is_empty() {
++            let message = "`documents` cannot be empty".to_string();
++            tracing::error!("{message}");
++            let err = ErrorResponse {
++                error: message,
++                error_type: ErrorType::Empty,
++            };
++            let counter = metrics::counter!("te_request_failure", "err" => "validation");
++            counter.increment(1);
++            Err(err)?;
++        }
++    
++        match &info.model_type {
++            ModelType::Reranker(_) => Ok(()),
++            ModelType::Classifier(_) | ModelType::Embedding(_) => {
++                let counter = metrics::counter!("te_request_failure", "err" => "model_type");
++                counter.increment(1);
++                let message = "model is not a re-ranker model".to_string();
++                Err(TextEmbeddingsError::Backend(BackendError::Inference(
++                    message,
++                )))
++            }
++        }
++        .map_err(|err| {
++            tracing::error!("{err}");
++            ErrorResponse::from(err)
++        })?;
++    
++        // Closure for rerank
++        let rerank_inner = move |query: String, document: String, truncate: bool, infer: Infer| async move {
++            let permit = infer.acquire_permit().await;
++    
++            let response = infer
++                .predict(
++                    (query, document),
++                    truncate,
++                    req.truncation_direction.into(),
++                    req.raw_scores,
++                    permit,
++                )
++                .await
++                .map_err(ErrorResponse::from)?;
++    
++            let score = response.results[0];
++    
++            Ok::<(usize, Duration, Duration, Duration, f32), ErrorResponse>((
++                response.metadata.prompt_tokens,
++                response.metadata.tokenization,
++                response.metadata.queue,
++                response.metadata.inference,
++                score,
++            ))
++        };
++    
++        let truncate = req.truncate.unwrap_or(info.auto_truncate);
++    
++        let (response, metadata) = {
++            let counter = metrics::counter!("te_request_count", "method" => "batch");
++            counter.increment(1);
++    
++            let batch_size = req.documents.len();
++            if batch_size > info.max_client_batch_size {
++                let message = format!(
++                    "batch size {batch_size} > maximum allowed batch size {}",
++                    info.max_client_batch_size
++                );
++                tracing::error!("{message}");
++                let err = ErrorResponse {
++                    error: message,
++                    error_type: ErrorType::Validation,
++                };
++                let counter = metrics::counter!("te_request_failure", "err" => "batch_size");
++                counter.increment(1);
++                Err(err)?;
++            }
++    
++            let mut futures = Vec::with_capacity(batch_size);
++            let query_chars = req.query.chars().count();
++            let mut compute_chars = query_chars * batch_size;
++    
++            for document in &req.documents {
++                compute_chars += document.chars().count();
++                let local_infer = infer.clone();
++                futures.push(rerank_inner(
++                    req.query.clone(),
++                    document.clone(),
++                    truncate,
++                    local_infer.0,
++                ))
++            }
++            let res = join_all(futures)
++                .await
++                .into_iter()
++                .collect::<Result<Vec<(usize, Duration, Duration, Duration, f32)>, ErrorResponse>>()?;
++    
++            let mut results = Vec::with_capacity(batch_size);
++            let mut total_tokenization_time = 0;
++            let mut total_queue_time = 0;
++            let mut total_inference_time = 0;
++            let mut total_compute_tokens = 0;
++    
++            for (index, r) in res.into_iter().enumerate() {
++                total_compute_tokens += r.0;
++                total_tokenization_time += r.1.as_nanos() as u64;
++                total_queue_time += r.2.as_nanos() as u64;
++                total_inference_time += r.3.as_nanos() as u64;
++                let document = if req.return_documents {
++                    Some(DocumentWrapper {
++                        text: req.documents[index].clone(),
++                    })
++                } else {
++                    None
++                };
++
++                let relevance_score = r.4;
++                // Check that s is not NaN or the partial_cmp below will panic
++                if relevance_score.is_nan() {
++                    Err(ErrorResponse {
++                        error: "score is NaN".to_string(),
++                        error_type: ErrorType::Backend,
++                    })?;
++                }
++    
++                results.push(OpenAIRank { index, document, relevance_score })
++            }
++    
++            // Reverse sort
++            results.sort_by(|x, y| x.relevance_score.partial_cmp(&y.relevance_score).unwrap());
++            results.reverse();
++
++            if let Some(top_n) = req.top_n {
++                results.truncate(top_n);
++            }
++    
++            let batch_size = batch_size as u64;
++    
++            let counter = metrics::counter!("te_request_success", "method" => "batch");
++            counter.increment(1);
++    
++            (
++                OpenAICompatRerankResponse{results},
++                ResponseMetadata::new(
++                    compute_chars,
++                    total_compute_tokens,
++                    start_time,
++                    Duration::from_nanos(total_tokenization_time / batch_size),
++                    Duration::from_nanos(total_queue_time / batch_size),
++                    Duration::from_nanos(total_inference_time / batch_size),
++                ),
++            )
++        };
++    
++        metadata.record_span(&span);
++        metadata.record_metrics();
++    
++        let headers = HeaderMap::from(metadata);
++    
++        tracing::info!("Success");
++    
++        Ok((headers, Json(response)))
++    }
++
+ /// Tokenize inputs
+ #[utoipa::path(
+ post,
+@@ -1646,7 +1847,10 @@ pub async fn run(
+     EmbedSparseResponse,
+     RerankRequest,
+     Rank,
++    OpenAIRank,
++    DocumentWrapper,
+     RerankResponse,
++    OpenAICompatRerankResponse,
+     EmbedRequest,
+     EmbedResponse,
+     ErrorResponse,
+@@ -1738,6 +1942,7 @@ pub async fn run(
+         .route("/embed_sparse", post(embed_sparse))
+         .route("/predict", post(predict))
+         .route("/rerank", post(rerank))
++        .route("/v1/rerank", post(openai_rerank))
+         .route("/similarity", post(similarity))
+         .route("/tokenize", post(tokenize))
+         .route("/decode", post(decode))
+@@ -1830,8 +2035,7 @@ pub async fn run(
+         routes = routes.layer(axum::middleware::from_fn(auth));
+     }
+ 
+-    let app = Router::new()
+-        .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
++    let mut app = Router::new()
+         .merge(routes)
+         .merge(public_routes)
+         .layer(Extension(infer))
+@@ -1844,6 +2048,14 @@ pub async fn run(
+         .layer(DefaultBodyLimit::max(payload_limit))
+         .layer(cors_layer);
+ 
++    if let Ok(swagger_ui) = std::env::var("ENABLE_SWAGGER_UI") {
++        tracing::info!("try to set swagger ui");
++        let _swagger_ui_on = String::from("true");
++            match swagger_ui.to_lowercase() {
++            _swagger_ui_on =>
++                app =app.merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
++            }
++        }
+     // Run server
+     let listener = tokio::net::TcpListener::bind(&addr)
+         .await
+@@ -1904,3 +2116,4 @@ impl From<serde_json::Error> for ErrorResponse {
+         }
+     }
+ }
++
+diff --git a/router/src/http/types.rs b/router/src/http/types.rs
+index dedaab6..505ae86 100644
+--- a/router/src/http/types.rs
++++ b/router/src/http/types.rs
+@@ -271,6 +271,26 @@ pub(crate) struct Rank {
+ #[derive(Serialize, ToSchema)]
+ pub(crate) struct RerankResponse(pub Vec<Rank>);
+ 
++#[derive(Serialize, ToSchema)]
++pub(crate) struct DocumentWrapper {
++    #[schema(example = "Deep Learning is ...")]
++    pub text: String,
++}
++
++#[derive(Serialize, ToSchema)]
++pub(crate) struct OpenAIRank {
++    #[schema(example = "0")]
++    pub index: usize,
++    #[schema(nullable = true, example = r#"{"text": "Deep Learning is ..."}"#, default = "null")]
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub document: Option<DocumentWrapper>,
++    #[schema(example = "1.0")]
++    pub relevance_score: f32,
++}
++
++#[derive(Serialize, ToSchema)]
++pub(crate) struct OpenAICompatRerankResponse{pub results: Vec<OpenAIRank>}
++
+ #[derive(Deserialize, ToSchema, Debug)]
+ #[serde(untagged)]
+ pub(crate) enum InputType {
+@@ -327,6 +347,29 @@ pub(crate) struct OpenAICompatRequest {
+     pub dimensions: Option<usize>,
+ }
+ 
++#[derive(Deserialize, ToSchema)]
++pub(crate) struct OpenAICompatRerankRequest {
++    #[schema(example = "What is Deep Learning?")]
++    pub query: String,
++    #[schema(example = json!(["Deep Learning is ..."]))]
++    pub documents: Vec<String>,
++    #[serde(default)]
++    #[schema(default = "false", example = "false", nullable = true)]
++    pub truncate: Option<bool>,
++    #[serde(default)]
++    #[schema(default = "right", example = "right")]
++    pub truncation_direction: TruncationDirection,
++    #[serde(default)]
++    #[schema(default = "false", example = "false")]
++    pub raw_scores: bool,
++    #[serde(default)]
++    #[schema(default = "false", example = "false")]
++    pub return_documents: bool,
++    #[serde(default)]
++    #[schema(example = 3, minimum = 1, nullable = true)]
++    pub top_n: Option<usize>,
++}
++
+ #[derive(Serialize, ToSchema)]
+ #[serde(untagged)]
+ pub(crate) enum Embedding {
+@@ -601,3 +644,4 @@ pub(crate) enum VertexPrediction {
+ pub(crate) struct VertexResponse {
+     pub predictions: Vec<VertexPrediction>,
+ }
++
+diff --git a/router/src/lib.rs b/router/src/lib.rs
+index d83bd95..042d05a 100644
+--- a/router/src/lib.rs
++++ b/router/src/lib.rs
+@@ -36,6 +36,7 @@ use tokenizers::processors::sequence::Sequence;
+ use tokenizers::processors::template::TemplateProcessing;
+ use tokenizers::{PostProcessorWrapper, Tokenizer};
+ use tracing::Span;
++use std::env;
+ 
+ pub use logging::init_logging;
+ 
+@@ -110,24 +111,42 @@ pub async fn run(
+     let backend_model_type = get_backend_model_type(&config, &model_root, pooling)?;
+ 
+     // Info model type
++    let is_rerank = std::env::var("IS_RERANK").unwrap_or_default() == "1";
+     let model_type = match &backend_model_type {
++        text_embeddings_backend::ModelType::Classifier if is_rerank => {
++            // �������������־Ϊ RERANK��ֱ���� reranker ��֧�������� config.json �ֶ�
++            let mut id2label = std::collections::HashMap::new();
++            id2label.insert("0".to_string(), "LABEL_0".to_string());
++
++            let mut label2id = std::collections::HashMap::new();
++            label2id.insert("LABEL_0".to_string(), 0);
++
++            let classifier_model = ClassifierModel { id2label, label2id };
++            ModelType::Reranker(classifier_model)
++        }
++
+         text_embeddings_backend::ModelType::Classifier => {
++            // ԭʼ classifier ��֧������ֶ��Ƿ����
+             let id2label = config
+                 .id2label
+                 .context("`config.json` does not contain `id2label`")?;
++            let label2id = config
++                .label2id
++                .context("`config.json` does not contain `label2id`")?;
++
+             let n_classes = id2label.len();
+             let classifier_model = ClassifierModel {
+                 id2label,
+-                label2id: config
+-                    .label2id
+-                    .context("`config.json` does not contain `label2id`")?,
++                label2id,
+             };
++
+             if n_classes > 1 {
+                 ModelType::Classifier(classifier_model)
+             } else {
+                 ModelType::Reranker(classifier_model)
+             }
+         }
++
+         text_embeddings_backend::ModelType::Embedding(pool) => {
+             ModelType::Embedding(EmbeddingModel {
+                 pooling: pool.to_string(),
+@@ -279,11 +298,14 @@ pub async fn run(
+         .await
+         .context("Model backend is not healthy")?;
+ 
+-    tracing::info!("Warming up model");
+-    backend
+-        .warmup(max_input_length, max_batch_tokens, max_batch_requests)
+-        .await
+-        .context("Model backend is not healthy")?;
++    if !backend.padded_model {
++        tracing::info!("Warming up model");
++        let max_batch_requests = Some(3);
++        backend
++            .warmup(4, 4, max_batch_requests)
++            .await
++            .context("Model backend is not healthy")?;
++    }
+ 
+     let max_batch_requests = backend
+         .max_batch_size
+@@ -392,11 +414,11 @@ fn get_backend_model_type(
+             continue;
+         }
+ 
+-        if Some(text_embeddings_backend::Pool::Splade) == pooling && arch.ends_with("MaskedLM") {
++        if Some(text_embeddings_backend::Pool::Splade) == pooling && (arch.ends_with("MaskedLM") || arch.ends_with("RobertaModel")) {
+             return Ok(text_embeddings_backend::ModelType::Embedding(
+                 text_embeddings_backend::Pool::Splade,
+             ));
+-        } else if arch.ends_with("Classification") {
++        } else if arch.ends_with("Classification") || env::var("IS_RERANK").is_ok() {
+             if pooling.is_some() {
+                 tracing::warn!(
+                     "`--pooling` arg is set but model is a classifier. Ignoring `--pooling` arg."
+diff --git a/router/src/main.rs b/router/src/main.rs
+index 52bb8e9..ca9f09a 100644
+--- a/router/src/main.rs
++++ b/router/src/main.rs
+@@ -48,7 +48,7 @@ struct Args {
+     /// The maximum amount of concurrent requests for this particular deployment.
+     /// Having a low limit will refuse clients requests instead of having them
+     /// wait for too long and is usually good to handle backpressure correctly.
+-    #[clap(default_value = "512", long, env)]
++    #[clap(default_value = "64", long, env)]
+     max_concurrent_requests: usize,
+ 
+     /// **IMPORTANT** This is one critical control to allow maximum usage
