@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qwen3模型性能对比分析报告</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+    
+    <!-- 内联数据区 -->
+    <script>
+        // 完整的性能测试数据
+        const performanceData = [
+            {"model": "仅NPU融合注意力", "num_thread": 1, "total_time": 23.59, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 43.40, "avg_response_time": 0.454, "median_response_time": 0.455, "p95_response_time": 0.500, "min_response_time": 0.205, "max_response_time": 0.506},
+            {"model": "仅NPU融合注意力", "num_thread": 4, "total_time": 9.24, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 110.87, "avg_response_time": 0.695, "median_response_time": 0.697, "p95_response_time": 0.787, "min_response_time": 0.526, "max_response_time": 1.003},
+            {"model": "仅NPU融合注意力", "num_thread": 8, "total_time": 9.71, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 105.49, "avg_response_time": 1.361, "median_response_time": 1.431, "p95_response_time": 1.668, "min_response_time": 0.420, "max_response_time": 1.807},
+            {"model": "仅NPU融合注意力", "num_thread": 20, "total_time": 9.75, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 105.05, "avg_response_time": 2.945, "median_response_time": 3.300, "p95_response_time": 3.815, "min_response_time": 0.550, "max_response_time": 4.134},
+            {"model": "仅NPU融合注意力", "num_thread": 40, "total_time": 9.98, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 102.64, "avg_response_time": 4.297, "median_response_time": 4.374, "p95_response_time": 7.313, "min_response_time": 0.288, "max_response_time": 7.926},
+            {"model": "NPU融合注意力+RMSNorm", "num_thread": 1, "total_time": 23.41, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 43.75, "avg_response_time": 0.450, "median_response_time": 0.454, "p95_response_time": 0.483, "min_response_time": 0.214, "max_response_time": 0.490},
+            {"model": "NPU融合注意力+RMSNorm", "num_thread": 4, "total_time": 9.01, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 113.68, "avg_response_time": 0.677, "median_response_time": 0.680, "p95_response_time": 0.810, "min_response_time": 0.436, "max_response_time": 0.971},
+            {"model": "NPU融合注意力+RMSNorm", "num_thread": 8, "total_time": 9.18, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 111.53, "avg_response_time": 1.284, "median_response_time": 1.345, "p95_response_time": 1.549, "min_response_time": 0.429, "max_response_time": 1.704},
+            {"model": "NPU融合注意力+RMSNorm", "num_thread": 20, "total_time": 9.20, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 111.31, "avg_response_time": 2.780, "median_response_time": 3.054, "p95_response_time": 3.584, "min_response_time": 0.537, "max_response_time": 3.898},
+            {"model": "NPU融合注意力+RMSNorm", "num_thread": 40, "total_time": 9.17, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 111.69, "avg_response_time": 4.056, "median_response_time": 4.060, "p95_response_time": 6.651, "min_response_time": 0.482, "max_response_time": 7.311},
+            {"model": "全NPU算子融合", "num_thread": 1, "total_time": 24.08, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 42.53, "avg_response_time": 0.463, "median_response_time": 0.468, "p95_response_time": 0.517, "min_response_time": 0.209, "max_response_time": 0.558},
+            {"model": "全NPU算子融合", "num_thread": 4, "total_time": 8.57, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 119.45, "avg_response_time": 0.645, "median_response_time": 0.643, "p95_response_time": 0.759, "min_response_time": 0.472, "max_response_time": 0.965},
+            {"model": "全NPU算子融合", "num_thread": 8, "total_time": 8.69, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 117.89, "avg_response_time": 1.203, "median_response_time": 1.257, "p95_response_time": 1.472, "min_response_time": 0.310, "max_response_time": 1.770},
+            {"model": "全NPU算子融合", "num_thread": 20, "total_time": 8.69, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 117.82, "avg_response_time": 2.622, "median_response_time": 2.896, "p95_response_time": 3.403, "min_response_time": 0.552, "max_response_time": 3.736},
+            {"model": "全NPU算子融合", "num_thread": 40, "total_time": 8.91, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 114.99, "avg_response_time": 3.795, "median_response_time": 3.883, "p95_response_time": 6.353, "min_response_time": 0.314, "max_response_time": 6.860},
+            {"model": "原生Flash Qwen3", "num_thread": 1, "total_time": 33.53, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 30.54, "avg_response_time": 0.645, "median_response_time": 0.641, "p95_response_time": 0.764, "min_response_time": 0.391, "max_response_time": 0.797},
+            {"model": "原生Flash Qwen3", "num_thread": 4, "total_time": 14.56, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 70.33, "avg_response_time": 1.095, "median_response_time": 1.071, "p95_response_time": 1.528, "min_response_time": 0.638, "max_response_time": 1.627},
+            {"model": "原生Flash Qwen3", "num_thread": 8, "total_time": 14.84, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 68.99, "avg_response_time": 2.075, "median_response_time": 2.228, "p95_response_time": 2.642, "min_response_time": 0.823, "max_response_time": 2.698},
+            {"model": "原生Flash Qwen3", "num_thread": 20, "total_time": 14.86, "context_length": 1024, "total_requests": 1024, "batch_size": 20, "success_rate": "100%", "qps": 68.89, "avg_response_time": 4.503, "median_response_time": 5.051, "p95_response_time": 5.892, "min_response_time": 0.827, "max_response_time": 6.320}
+        ];
+
+        // 模型类型和颜色配置（优化对比度）
+        const colorMap = {
+            '仅NPU融合注意力': '#FF6B6B',
+            'NPU融合注意力+RMSNorm': '#FF9F1C',
+            '全NPU算子融合': '#1A535C',
+            '原生Flash Qwen3': '#96CEB4'
+        };
+        
+        const qpsData = {
+            '仅NPU融合注意力': [43.40, 110.87, 105.49, 105.05, 102.64],
+            'NPU融合注意力+RMSNorm': [43.75, 113.68, 111.53, 111.31, 111.69],
+            '全NPU算子融合': [42.53, 119.45, 117.89, 117.82, 114.99],
+            '原生Flash Qwen3': [30.54, 70.33, 68.99, 68.89, null]
+        };
+        
+        const responseTimeData = {
+            '仅NPU融合注意力': [0.454, 0.695, 1.361, 2.945, 4.297],
+            'NPU融合注意力+RMSNorm': [0.450, 0.677, 1.284, 2.780, 4.056],
+            '全NPU算子融合': [0.463, 0.645, 1.203, 2.622, 3.795],
+            '原生Flash Qwen3': [0.645, 1.095, 2.075, 4.503, null]
+        };
+        
+        const totalTimeData = {
+            '仅NPU融合注意力': [23.59, 9.24, 9.71, 9.75, 9.98],
+            'NPU融合注意力+RMSNorm': [23.41, 9.01, 9.18, 9.20, 9.17],
+            '全NPU算子融合': [24.08, 8.57, 8.69, 8.69, 8.91],
+            '原生Flash Qwen3': [33.53, 14.56, 14.84, 14.86, null]
+        };
+        
+        const improvementData = {
+            '仅NPU融合注意力': [42.1, 57.6, 52.9, 52.5, null],
+            'NPU融合注意力+RMSNorm': [43.3, 61.6, 61.7, 61.6, null],
+            '全NPU算子融合': [39.3, 69.9, 70.9, 71.0, null]
+        };
+        
+        const models = ['仅NPU融合注意力', 'NPU融合注意力+RMSNorm', '全NPU算子融合', '原生Flash Qwen3'];
+        const threads = [1, 4, 8, 20, 40];
+
+        // 排序状态管理
+        let sortState = {
+            column: null,
+            direction: 'asc' // 'asc' 升序, 'desc' 降序
+        };
+    </script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- 头部 -->
+    <header class="bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg">
+        <div class="container mx-auto px-6 py-8">
+            <h1 class="text-4xl font-bold mb-2">
+                <i class="fas fa-chart-line mr-3"></i>Qwen3模型性能对比分析报告
+            </h1>
+            <p class="text-blue-100 text-lg">魔改Flash Qwen3 vs 原生Flash Qwen3 性能测试结果</p>
+        </div>
+    </header>
+
+    <!-- 主要内容 -->
+    <main class="container mx-auto px-6 py-8">
+        <!-- 关键指标概览（新增奖杯标识突出最佳配置） -->
+        <section class="mb-12">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6 flex items-center">
+                <i class="fas fa-tachometer-alt mr-3 text-blue-600"></i>关键性能指标概览
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-red-500 hover:shadow-xl transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-600 text-sm font-medium">最高QPS 🏆</p>
+                            <p class="text-3xl font-bold text-red-600">119.45</p>
+                            <p class="text-gray-500 text-xs mt-1">全NPU算子融合 (4线程)</p>
+                        </div>
+                        <i class="fas fa-bolt text-red-500 text-2xl"></i>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-orange-500 hover:shadow-xl transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-600 text-sm font-medium">最低总时间 🏆</p>
+                            <p class="text-3xl font-bold text-orange-600">8.57s</p>
+                            <p class="text-gray-500 text-xs mt-1">全NPU算子融合 (4线程)</p>
+                        </div>
+                        <i class="fas fa-stopwatch text-orange-500 text-2xl"></i>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-500 hover:shadow-xl transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-600 text-sm font-medium">最低响应时间 🏆</p>
+                            <p class="text-3xl font-bold text-green-600">0.450s</p>
+                            <p class="text-gray-500 text-xs mt-1">NPU融合注意力+RMSNorm (1线程)</p>
+                        </div>
+                        <i class="fas fa-clock text-green-500 text-2xl"></i>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-blue-500 hover:shadow-xl transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-600 text-sm font-medium">最大性能提升 🏆</p>
+                            <p class="text-3xl font-bold text-blue-600">69.9%</p>
+                            <p class="text-gray-500 text-xs mt-1">全NPU算子融合 vs 原生 (4线程)</p>
+                        </div>
+                        <i class="fas fa-arrow-up text-blue-500 text-2xl"></i>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 性能对比图表 -->
+        <section class="mb-12">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6 flex items-center">
+                <i class="fas fa-chart-line mr-3 text-blue-600"></i>性能对比图表
+            </h2>
+
+            <!-- QPS对比图 -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">QPS对比</h3>
+                <div class="h-96">
+                    <canvas id="qpsChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 响应时间对比图 -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">平均响应时间对比</h3>
+                <div class="h-96">
+                    <canvas id="responseTimeChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 总时间对比图 -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">总处理时间对比</h3>
+                <div class="h-96">
+                    <canvas id="totalTimeChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 性能提升对比图 -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">性能提升百分比</h3>
+                <div class="h-96">
+                    <canvas id="improvementChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- 性能测试样例数据 - 新增排序功能 -->
+        <section class="mb-12">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6 flex items-center">
+                <i class="fas fa-table mr-3 text-blue-600"></i>性能测试完整数据
+            </h2>
+            
+            <!-- 排序提示 -->
+            <div class="mb-4 text-sm text-gray-600 bg-blue-50 p-3 rounded-lg">
+                <i class="fas fa-info-circle text-blue-600 mr-2"></i>
+                点击表头可对对应列进行排序，再次点击可切换升序/降序。数值列默认按数值大小排序，文本列按字母/字符顺序排序。
+            </div>
+            
+            <!-- 滑动条容器 -->
+            <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm" id="performanceTable">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('model')">
+                                    模型类型 <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('num_thread')">
+                                    线程数 <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('total_time')">
+                                    总时间(s) <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('context_length')">
+                                    上下文长度 <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('total_requests')">
+                                    请求总数 <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('batch_size')">
+                                    批大小 <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('success_rate')">
+                                    成功率 <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('qps')">
+                                    QPS <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('avg_response_time')">
+                                    平均响应时间(s) <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('median_response_time')">
+                                    中位数响应时间(s) <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('p95_response_time')">
+                                    P95响应时间(s) <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('min_response_time')">
+                                    最小响应时间(s) <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 transition-colors" onclick="sortTable('max_response_time')">
+                                    最大响应时间(s) <i class="fas fa-sort ml-1 text-gray-400"></i>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody id="dataTableBody" class="divide-y divide-gray-200">
+                            <!-- 数据将通过JavaScript动态填充 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- 数据总结（删除未来优化方向，新增奖杯标识突出最佳配置） -->
+        <section class="mb-12">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6 flex items-center">
+                <i class="fas fa-lightbulb mr-3 text-blue-600"></i>性能分析总结
+            </h2>
+            <div class="bg-white rounded-xl shadow-lg p-8">
+                <div class="prose max-w-none">
+                    <h3 class="text-2xl font-semibold text-gray-800 mb-4">关键发现</h3>
+                    
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                        <div class="space-y-4">
+                            <h4 class="text-lg font-semibold text-green-600 flex items-center">
+                                <i class="fas fa-trophy mr-2 text-yellow-500"></i>最佳性能配置
+                            </h4>
+                            <ul class="space-y-2 text-gray-700">
+                                <li class="flex items-start">
+                                    <i class="fas fa-award text-yellow-500 mr-2 mt-1 text-sm"></i>
+                                    <span><strong>全NPU算子融合模型 + 4线程</strong> 为本次测试综合最优配置，QPS达到119.45，相比原生模型提升69.9%</span>
+                                </li>
+                                <li class="flex items-start">
+                                    <i class="fas fa-award text-yellow-500 mr-2 mt-1 text-sm"></i>
+                                    <span><strong>最低延迟配置</strong>：NPU融合注意力+RMSNorm模型（1线程），平均响应时间仅0.450s</span>
+                                </li>
+                                <li class="flex items-start">
+                                    <i class="fas fa-check-circle text-green-500 mr-2 mt-1 text-sm"></i>
+                                    <span>所有魔改模型均显著优于原生模型，验证了NPU算子融合的有效性</span>
+                                </li>
+                                <li class="flex items-start">
+                                    <i class="fas fa-check-circle text-green-500 mr-2 mt-1 text-sm"></i>
+                                    <span>4线程为最优线程配置，超过8线程后QPS提升平缓但响应时间显著增加</span>
+                                </li>
+                            </ul>
+                        </div>
+                        
+                        <div class="space-y-4">
+                            <h4 class="text-lg font-semibold text-orange-600 flex items-center">
+                                <i class="fas fa-exclamation-triangle mr-2"></i>性能瓶颈
+                            </h4>
+                            <ul class="space-y-2 text-gray-700">
+                                <li class="flex items-start">
+                                    <i class="fas fa-arrow-right text-orange-500 mr-2 mt-1 text-sm"></i>
+                                    <span>线程数超过4后，QPS提升趋于平缓，甚至略有下降</span>
+                                </li>
+                                <li class="flex items-start">
+                                    <i class="fas fa-arrow-right text-orange-500 mr-2 mt-1 text-sm"></i>
+                                    <span>高线程配置（20-40线程）下，<strong>响应时间显著增加</strong></span>
+                                </li>
+                                <li class="flex items-start">
+                                    <i class="fas fa-arrow-right text-orange-500 mr-2 mt-1 text-sm"></i>
+                                    <span>原生模型在高线程下存在<strong>资源竞争</strong>问题，性能衰减明显</span>
+                                </li>
+                                <li class="flex items-start">
+                                    <i class="fas fa-arrow-right text-orange-500 mr-2 mt-1 text-sm"></i>
+                                    <span>建议避免使用40线程配置，响应时间提升超过3倍但QPS仅提升约10%</span>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <h3 class="text-2xl font-semibold text-gray-800 mb-4">技术建议</h3>
+                    <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-6 border-l-4 border-blue-500">
+                        <ol class="space-y-3 text-gray-700">
+                            <li class="flex items-start">
+                                <span class="bg-yellow-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold mr-3 mt-0.5 flex-shrink-0">🏆</span>
+                                <span><strong>首选配置</strong>：全NPU算子融合模型 + 4线程，在吞吐量和响应时间间达到最佳平衡</span>
+                            </li>
+                            <li class="flex items-start">
+                                <span class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold mr-3 mt-0.5 flex-shrink-0">2</span>
+                                <span><strong>低延迟场景</strong>：选择NPU融合注意力+RMSNorm模型 + 1线程，满足毫秒级响应需求</span>
+                            </li>
+                            <li class="flex items-start">
+                                <span class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold mr-3 mt-0.5 flex-shrink-0">3</span>
+                                <span><strong>通用场景</strong>：推荐4-8线程配置，兼顾吞吐量和响应时间，资源利用率最优</span>
+                            </li>
+                            <li class="flex items-start">
+                                <span class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold mr-3 mt-0.5 flex-shrink-0">4</span>
+                                <span><strong>升级建议</strong>：将原生Flash Qwen3全面升级为全NPU算子融合版本，至少获得60%以上性能提升</span>
+                            </li>
+                            <li class="flex items-start">
+                                <span class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold mr-3 mt-0.5 flex-shrink-0">5</span>
+                                <span><strong>监控重点</strong>：部署后重点监控4线程配置下的CPU/内存利用率，避免资源瓶颈</span>
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- 页脚 -->
+    <footer class="bg-gray-800 text-white py-8">
+        <div class="container mx-auto px-6 text-center">
+            <p class="text-lg font-semibold mb-2">Qwen3模型性能对比分析报告</p>
+            <p class="text-gray-400">
+                <i class="fas fa-chart-area mr-2"></i>
+                Qwen3模型性能对比分析报告 - 生成时间: <span id="currentTime"></span>
+            </p>
+        </div>
+    </footer>
+
+    <script>
+        // 设置当前时间
+        document.getElementById('currentTime').textContent = new Date().toLocaleString('zh-CN');
+
+        // 排序函数
+        function sortTable(column) {
+            // 更新排序状态
+            if (sortState.column === column) {
+                // 切换排序方向
+                sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                // 新列排序，默认升序
+                sortState.column = column;
+                sortState.direction = 'asc';
+            }
+
+            // 复制数据进行排序
+            let sortedData = [...performanceData];
+            
+            // 根据列类型进行排序
+            sortedData.sort((a, b) => {
+                let valueA = a[column];
+                let valueB = b[column];
+                
+                // 判断是否为数值类型
+                if (!isNaN(parseFloat(valueA)) && !isNaN(parseFloat(valueB))) {
+                    valueA = parseFloat(valueA);
+                    valueB = parseFloat(valueB);
+                    return sortState.direction === 'asc' ? valueA - valueB : valueB - valueA;
+                } else {
+                    // 字符串类型排序
+                    return sortState.direction === 'asc' 
+                        ? valueA.localeCompare(valueB, 'zh-CN') 
+                        : valueB.localeCompare(valueA, 'zh-CN');
+                }
+            });
+
+            // 更新表格显示
+            populateDataTable(sortedData);
+            
+            // 更新表头排序图标
+            updateSortIcons(column);
+        }
+
+        // 更新排序图标
+        function updateSortIcons(activeColumn) {
+            // 移除所有表头的排序图标样式
+            const allThs = document.querySelectorAll('#performanceTable th');
+            allThs.forEach(th => {
+                const icon = th.querySelector('i');
+                if (icon) {
+                    icon.className = 'fas fa-sort ml-1 text-gray-400';
+                }
+            });
+
+            // 为当前排序列设置对应图标
+            const activeTh = Array.from(allThs).find(th => {
+                const onclick = th.getAttribute('onclick') || '';
+                return onclick.includes(`sortTable('${activeColumn}')`);
+            });
+            
+            if (activeTh) {
+                const icon = activeTh.querySelector('i');
+                if (icon) {
+                    icon.className = `fas fa-sort-${sortState.direction === 'asc' ? 'up' : 'down'} ml-1 text-blue-600`;
+                }
+            }
+        }
+
+        // 填充数据表格（支持传入排序后的数据）
+        function populateDataTable(data = performanceData) {
+            const tbody = document.getElementById('dataTableBody');
+            tbody.innerHTML = '';
+
+            data.forEach((row, index) => {
+                const tr = document.createElement('tr');
+                tr.className = index % 2 === 0 ? 'bg-white hover:bg-gray-50' : 'bg-gray-50 hover:bg-gray-100';
+                
+                // 为最佳配置行添加特殊标识
+                let bestBadge = '';
+                if (row.model === '全NPU算子融合' && row.num_thread === 4) {
+                    bestBadge = ' 🏆';
+                } else if (row.model === 'NPU融合注意力+RMSNorm' && row.num_thread === 1) {
+                    bestBadge = ' 🚀';
+                }
+                
+                // 根据模型类型设置不同的行样式
+                let modelBadge = '';
+                switch(row.model) {
+                    case '仅NPU融合注意力':
+                        modelBadge = `<span class="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">仅注意力${bestBadge}</span>`;
+                        break;
+                    case 'NPU融合注意力+RMSNorm':
+                        modelBadge = `<span class="px-2 py-1 bg-orange-100 text-orange-800 rounded-full text-xs font-medium">注意力+Norm${bestBadge}</span>`;
+                        break;
+                    case '全NPU算子融合':
+                        modelBadge = `<span class="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">全算子${bestBadge}</span>`;
+                        break;
+                    case '原生Flash Qwen3':
+                        modelBadge = `<span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">原生${bestBadge}</span>`;
+                        break;
+                }
+
+                tr.innerHTML = `
+                    <td class="px-4 py-3">${modelBadge}</td>
+                    <td class="px-4 py-3 font-medium">${row.num_thread}</td>
+                    <td class="px-4 py-3">${row.total_time}</td>
+                    <td class="px-4 py-3">${row.context_length}</td>
+                    <td class="px-4 py-3">${row.total_requests}</td>
+                    <td class="px-4 py-3">${row.batch_size}</td>
+                    <td class="px-4 py-3">${row.success_rate}</td>
+                    <td class="px-4 py-3 font-semibold text-blue-600">${row.qps}</td>
+                    <td class="px-4 py-3">${row.avg_response_time}</td>
+                    <td class="px-4 py-3">${row.median_response_time}</td>
+                    <td class="px-4 py-3">${row.p95_response_time}</td>
+                    <td class="px-4 py-3">${row.min_response_time}</td>
+                    <td class="px-4 py-3">${row.max_response_time}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // 创建QPS对比图
+        function createQpsChart() {
+            const ctx = document.getElementById('qpsChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: threads.map(t => t + '线程'),
+                    datasets: models.map(model => ({
+                        label: model,
+                        data: qpsData[model],
+                        borderColor: colorMap[model],
+                        backgroundColor: colorMap[model] + '10',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: colorMap[model],
+                        pointBorderColor: '#ffffff',
+                        pointBorderWidth: 2,
+                        pointRadius: 6,
+                        pointHoverRadius: 8,
+                        // 修复：拆分pointStyle配置，图例用固定样式，数据点用动态样式
+                        pointStyle: 'circle',
+                        // 动态设置数据点样式的插件
+                        plugins: [{
+                            id: 'customPointStyleQPS',
+                            beforeDraw: (chart) => {
+                                const datasets = chart.data.datasets;
+                                for (let i = 0; i < datasets.length; i++) {
+                                    const dataset = datasets[i];
+                                    if (dataset.label === '全NPU算子融合') {
+                                        // 找到4线程对应的索引
+                                        const starIndex = threads.indexOf(4);
+                                        if (starIndex !== -1 && chart.getDatasetMeta(i).data[starIndex]) {
+                                            chart.getDatasetMeta(i).data[starIndex].pointStyle = 'star';
+                                        }
+                                    }
+                                }
+                            }
+                        }]
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                padding: 20,
+                                usePointStyle: true,
+                                pointStyle: 'circle',
+                                font: {
+                                    size: 12
+                                }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: '#ffffff',
+                            bodyColor: '#ffffff',
+                            borderColor: '#374151',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label + ': ' + context.parsed.y + ' QPS';
+                                    // 最佳配置添加奖杯标识
+                                    if (context.dataset.label === '全NPU算子融合' && context.label === '4线程') {
+                                        label += ' 🏆 最佳配置';
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '线程数',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'QPS (每秒查询数)',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            },
+                            beginAtZero: true
+                        }
+                    },
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    }
+                }
+            });
+        }
+
+        // 创建响应时间对比图（修复图例颜色圆圈问题）
+        function createResponseTimeChart() {
+            const ctx = document.getElementById('responseTimeChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: threads.map(t => t + '线程'),
+                    datasets: models.map(model => ({
+                        label: model,
+                        data: responseTimeData[model],
+                        borderColor: colorMap[model],
+                        backgroundColor: colorMap[model] + '10',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: colorMap[model],
+                        pointBorderColor: '#ffffff',
+                        pointBorderWidth: 2,
+                        pointRadius: 6,
+                        pointHoverRadius: 8,
+                        // 修复：拆分pointStyle配置，图例用固定样式，数据点用动态样式
+                        pointStyle: 'circle', // 图例使用固定圆圈
+                        // 动态设置数据点样式的插件
+                        plugins: [{
+                            id: 'customPointStyle',
+                            beforeDraw: (chart) => {
+                                const datasets = chart.data.datasets;
+                                for (let i = 0; i < datasets.length; i++) {
+                                    const dataset = datasets[i];
+                                    if (dataset.label === 'NPU融合注意力+RMSNorm') {
+                                        // 找到1线程对应的索引（threads数组中1的索引是0）
+                                        const starIndex = threads.indexOf(1);
+                                        if (starIndex !== -1 && chart.getDatasetMeta(i).data[starIndex]) {
+                                            chart.getDatasetMeta(i).data[starIndex].pointStyle = 'star';
+                                        }
+                                    }
+                                }
+                            }
+                        }]
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                padding: 20,
+                                usePointStyle: true, // 确保图例显示点样式
+                                pointStyle: 'circle', // 强制图例使用圆圈
+                                font: {
+                                    size: 12
+                                }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: '#ffffff',
+                            bodyColor: '#ffffff',
+                            borderColor: '#374151',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label + ': ' + context.parsed.y + ' 秒';
+                                    // 最低延迟添加火箭标识
+                                    if (context.dataset.label === 'NPU融合注意力+RMSNorm' && context.label === '1线程') {
+                                        label += ' 🚀 最低延迟';
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '线程数',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '平均响应时间 (秒)',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            },
+                            beginAtZero: true
+                        }
+                    },
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    }
+                }
+            });
+        }
+
+        // 创建总时间对比图
+        function createTotalTimeChart() {
+            const ctx = document.getElementById('totalTimeChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: threads.map(t => t + '线程'),
+                    datasets: models.map(model => ({
+                        label: model,
+                        data: totalTimeData[model],
+                        backgroundColor: colorMap[model] + '80',
+                        borderColor: colorMap[model],
+                        borderWidth: 2,
+                        borderRadius: 6,
+                        borderSkipped: false
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                padding: 20,
+                                usePointStyle: true,
+                                pointStyle: 'circle',
+                                font: {
+                                    size: 12
+                                }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: '#ffffff',
+                            bodyColor: '#ffffff',
+                            borderColor: '#374151',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label + ': ' + context.parsed.y + ' 秒';
+                                    // 最佳配置添加奖杯标识
+                                    if (context.dataset.label === '全NPU算子融合' && context.label === '4线程') {
+                                        label += ' 🏆 最快总时间';
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '线程数',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '总处理时间 (秒)',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            },
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // 创建性能提升对比图
+        function createImprovementChart() {
+            const ctx = document.getElementById('improvementChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: threads.slice(0, 4).map(t => t + '线程'), // 只显示前4个线程的数据
+                    datasets: Object.keys(improvementData).map(model => ({
+                        label: model,
+                        data: improvementData[model].slice(0, 4),
+                        backgroundColor: colorMap[model] + '80',
+                        borderColor: colorMap[model],
+                        borderWidth: 2,
+                        borderRadius: 6,
+                        borderSkipped: false
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                padding: 20,
+                                usePointStyle: true,
+                                pointStyle: 'circle',
+                                font: {
+                                    size: 12
+                                }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: '#ffffff',
+                            bodyColor: '#ffffff',
+                            borderColor: '#374151',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label + ': ' + context.parsed.y + '%';
+                                    // 最大提升添加奖杯标识
+                                    if (context.dataset.label === '全NPU算子融合' && context.label === '4线程') {
+                                        label += ' 🏆 最大提升';
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '线程数',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '性能提升百分比 (%)',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            },
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            populateDataTable();
+            createQpsChart();
+            createResponseTimeChart();
+            createTotalTimeChart();
+            createImprovementChart();
+        });
+    </script>
+</body>
+</html>

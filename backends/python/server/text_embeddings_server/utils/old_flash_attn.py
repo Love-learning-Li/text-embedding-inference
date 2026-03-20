@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import torch
 import torch_npu
@@ -16,7 +17,31 @@ is_hpu = is_hpu()
 use_ipex = use_ipex()
 is_npu = is_npu()
 
+
+def _actual_seq_lengths_for_tnd_fia(
+    cu_seqlens: torch.Tensor,
+    total_tokens: int,
+    tensor_name: str,
+) -> list[int]:
+    actual_seq_lens = cu_seqlens.tolist()
+    if actual_seq_lens and actual_seq_lens[0] == 0:
+        actual_seq_lens = actual_seq_lens[1:]
+
+    if actual_seq_lens and actual_seq_lens[-1] != total_tokens:
+        raise ValueError(
+            f"For TND layout, {tensor_name} actual_seq_lengths must be cumulative "
+            f"and end at total tokens. Got last={actual_seq_lens[-1]}, "
+            f"total_tokens={total_tokens}, raw_cu_seqlens={cu_seqlens.tolist()}"
+        )
+
+    return actual_seq_lens
+
+
 if is_npu:
+    if not hasattr(torch_npu, "npu_fused_infer_attention_score"):
+        raise ImportError(
+            "NPU attention requires torch_npu.npu_fused_infer_attention_score."
+        )
     HAS_FLASH_ATTN = True
 elif use_ipex or is_hpu:
     HAS_FLASH_ATTN_V2 = True
@@ -96,46 +121,82 @@ def npu_attn(
     v,
     num_heads,
     out,
-    attn_mask,
+    _attn_mask,
     seqlen_q,
     seqlen_k,
-    max_seqlen_q,
-    max_seqlen_k,
+    _max_seqlen_q,
+    _max_seqlen_k,
     softmax_scale,
     is_causal=False,
-    ):
+    num_key_value_heads: Optional[int] = None,
+):
+    q = q.contiguous()
+    k = k.contiguous()
+    v = v.contiguous()
+    attn_mask_npu = None
+    sparse_mode = 0
     if is_causal:
-        attn_mask_npu = torch.triu(torch.ones((2048, 2048), dtype=torch.bool, device=q.device), diagonal=1)
-        out_ = torch_npu.npu_fusion_attention(
-                query=q,
-                key=k,
-                value=v,
-                head_num=num_heads,
-                input_layout="TND",
-                scale=softmax_scale,
-                actual_seq_qlen=seqlen_q.tolist(),
-                actual_seq_kvlen=seqlen_k.tolist(),
-                sparse_mode=3,
-                atten_mask=attn_mask_npu
-            )[0]
-    else:
-        out_ = torch_npu.npu_fusion_attention(
-                    query=q,
-                    key=k,
-                    value=v,
-                    head_num=num_heads,
-                    input_layout="TND",
-                    scale=softmax_scale,
-                    actual_seq_qlen=seqlen_q.tolist(),
-                    actual_seq_kvlen=seqlen_k.tolist(),
-                )[0]
-   
+        attn_mask_npu = torch.triu(
+            torch.ones((2048, 2048), dtype=torch.bool, device=q.device),
+            diagonal=1,
+        ).contiguous()
+        sparse_mode = 3
+
+    actual_seq_lengths = _actual_seq_lengths_for_tnd_fia(
+        seqlen_q,
+        q.shape[0],
+        "query",
+    )
+    actual_seq_lengths_kv = _actual_seq_lengths_for_tnd_fia(
+        seqlen_k,
+        k.shape[0],
+        "key/value",
+    )
+    num_key_value_heads = (
+        num_heads if num_key_value_heads is None else num_key_value_heads
+    )
+
+    try:
+        out_ = torch_npu.npu_fused_infer_attention_score(
+            query=q,
+            key=k,
+            value=v,
+            num_heads=num_heads,
+            num_key_value_heads=num_key_value_heads,
+            input_layout="TND",
+            scale=softmax_scale,
+            actual_seq_lengths=actual_seq_lengths,
+            actual_seq_lengths_kv=actual_seq_lengths_kv,
+            sparse_mode=sparse_mode,
+            atten_mask=attn_mask_npu,
+        )[0]
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "npu_fused_infer_attention_score failed with "
+            f"q_shape={tuple(q.shape)}, k_shape={tuple(k.shape)}, "
+            f"v_shape={tuple(v.shape)}, num_heads={num_heads}, "
+            f"num_key_value_heads={num_key_value_heads}, "
+            f"actual_seq_lengths={actual_seq_lengths}, "
+            f"actual_seq_lengths_kv={actual_seq_lengths_kv}, "
+            f"is_causal={is_causal}, sparse_mode={sparse_mode}"
+        ) from exc
+
     out.copy_(out_)
     return out
 
 
 def attention(
-    q, k, v, num_heads, out, cu_seqlens, max_s, softmax_scale, is_causal=False, attn_mask=None
+    q,
+    k,
+    v,
+    num_heads,
+    out,
+    cu_seqlens,
+    max_s,
+    softmax_scale,
+    is_causal=False,
+    attn_mask=None,
+    num_key_value_heads: Optional[int] = None,
 ):
     if HAS_FLASH_ATTN_V2:
         if use_ipex:
@@ -209,9 +270,10 @@ def attention(
                 max_s,
                 softmax_scale,
                 is_causal,
-                )
-            
-        else:   
+                num_key_value_heads=num_key_value_heads,
+            )
+
+        else:
             return flash_attn_cuda.fwd(
                 q,
                 k,

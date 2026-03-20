@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import torch
 import torch_npu
@@ -15,8 +16,57 @@ HAS_FLASH_ATTN_V2 = False
 is_hpu = is_hpu()
 use_ipex = use_ipex()
 is_npu = is_npu()
+_NPU_CAUSAL_MASK_CACHE = {}
+
+
+def _actual_seq_lengths_for_tnd_fia(
+    cu_seqlens: torch.Tensor,
+    total_tokens: int,
+    tensor_name: str,
+) -> list[int]:
+    actual_seq_lens = cu_seqlens.tolist()
+    if actual_seq_lens and actual_seq_lens[0] == 0:
+        actual_seq_lens = actual_seq_lens[1:]
+
+    if actual_seq_lens and actual_seq_lens[-1] != total_tokens:
+        raise ValueError(
+            f"For TND layout, {tensor_name} actual_seq_lengths must be cumulative "
+            f"and end at total tokens. Got last={actual_seq_lens[-1]}, "
+            f"total_tokens={total_tokens}, raw_cu_seqlens={cu_seqlens.tolist()}"
+        )
+
+    return actual_seq_lens
+
+
+def _normalize_attention_output(result):
+    if isinstance(result, (tuple, list)):
+        return result[0]
+    return result
+
+
+def _ensure_attention_out(q: torch.Tensor, out: Optional[torch.Tensor]) -> torch.Tensor:
+    if out is None:
+        return torch.empty_like(q)
+    return out
+
+
+def _get_npu_causal_mask(device: torch.device, size: int = 2048) -> torch.Tensor:
+    key = (str(device), size)
+    mask = _NPU_CAUSAL_MASK_CACHE.get(key)
+    if mask is None:
+        mask = torch.triu(
+            torch.ones((size, size), dtype=torch.bool, device=device),
+            diagonal=1,
+        ).contiguous()
+        _NPU_CAUSAL_MASK_CACHE[key] = mask
+    return mask
+
 
 if is_npu:
+    if not hasattr(torch_npu, "npu_fused_infer_attention_score"):
+        raise ImportError(
+            "NPU attention requires torch_npu.npu_fused_infer_attention_score."
+        )
     HAS_FLASH_ATTN = True
 elif use_ipex or is_hpu:
     HAS_FLASH_ATTN_V2 = True
@@ -66,7 +116,7 @@ def hpu_attn(
     q,
     k,
     v,
-    out,
+    _out,
     attn_mask,
     seqlen_q,
     seqlen_k,
@@ -86,114 +136,100 @@ def hpu_attn(
     out_ = FusedSDPA.apply(
         q, k, v, attn_mask, 0.0, is_causal, softmax_scale, "fast", False
     )
-    out_ = out_.transpose(1, 2)
-    out.copy_(out_)
-    return out
+    return out_.transpose(1, 2)
 
 def npu_attn(
     q,
     k,
     v,
     num_heads,
-    out,
+    _out,
     attn_mask,
     seqlen_q,
     seqlen_k,
     max_seqlen_q,
-    max_seqlen_k,
+    _max_seqlen_k,
     softmax_scale,
     is_causal=False,
-    ):
-    # npu_fusion_attention for FlashBatch
-    # Handle 4D input [batch, seq, heads, dim] -> convert to 3D [total_seq, heads, dim]
-    
-    # logger.info(f"[NPU Attention] Input shapes - q: {q.shape}, k: {k.shape}, v: {v.shape}")
-    # logger.info(f"[NPU Attention] num_heads: {num_heads}, scale: {softmax_scale}")
-    # logger.info(f"[NPU Attention] seqlen_q: {seqlen_q}, seqlen_k: {seqlen_k}")
-    # logger.info(f"[NPU Attention] max_seqlen_q: {max_seqlen_q}, is_causal: {is_causal}")
-    
-    # Convert 4D to 3D if needed
-    if q.dim() == 4:
-        batch_size, seq_len, heads, head_dim = q.shape
-        q = q.reshape(batch_size * seq_len, heads, head_dim)
-        k = k.reshape(batch_size * seq_len, heads, head_dim)
-        
-        # v might already be 3D [batch, heads, dim] or 4D [batch, seq, heads, dim]
-        if v.dim() == 4:
-            v = v.reshape(batch_size * seq_len, heads, head_dim)
-        
-        # logger.info(f"[NPU Attention] Reshaped to 3D - q: {q.shape}, k: {k.shape}, v: {v.shape}")
-    elif v.dim() == 3 and q.dim() == 3:
-        # Both q, k, v are already 3D, ensure they're in TND format [total_seq, heads, dim]
-        # logger.info(f"[NPU Attention] Already 3D - q: {q.shape}, k: {k.shape}, v: {v.shape}")
-        pass
-    
-    # For varlen/FlashBatch, use TND format
-    # sparse_mode=2 for causal (rightDownCausal) attention
+    num_key_value_heads: Optional[int] = None,
+):
+    q = q.contiguous()
+    k = k.contiguous()
+    v = v.contiguous()
+    attn_mask_npu = attn_mask.contiguous() if attn_mask is not None else None
+    sparse_mode = 0
     if is_causal:
-        sparse_mode = 2  
-    else:
-        sparse_mode = 0
-    
+        # FIA documentation requires an optimized 2048x2048 causal mask
+        # when sparse_mode=3, not a per-request (S, S) mask.
+        attn_mask_npu = _get_npu_causal_mask(q.device)
+        sparse_mode = 3
+
+    actual_seq_lengths = _actual_seq_lengths_for_tnd_fia(
+        seqlen_q,
+        q.shape[0],
+        "query",
+    )
+    actual_seq_lengths_kv = _actual_seq_lengths_for_tnd_fia(
+        seqlen_k,
+        k.shape[0],
+        "key/value",
+    )
+    num_key_value_heads = (
+        num_heads if num_key_value_heads is None else num_key_value_heads
+    )
+
     try:
-        out_ = torch_npu.npu_fusion_attention(
+        out_ = torch_npu.npu_fused_infer_attention_score(
             query=q,
             key=k,
             value=v,
-            head_num=num_heads,
+            num_heads=num_heads,
+            num_key_value_heads=num_key_value_heads,
             input_layout="TND",
             scale=softmax_scale,
-            actual_seq_qlen=seqlen_q.tolist(),
-            actual_seq_kvlen=seqlen_k.tolist(),
+            actual_seq_lengths=actual_seq_lengths,
+            actual_seq_lengths_kv=actual_seq_lengths_kv,
             sparse_mode=sparse_mode,
-            atten_mask=None,
-            pre_tockens=2147483647,
-            next_tockens=0 if is_causal else 2147483647,
+            atten_mask=attn_mask_npu,
         )[0]
-        out.copy_(out_)
-        # logger.info(f"[NPU Attention] TND format succeeded, output shape: {out_.shape}")
-        return out
-    except RuntimeError as e:
-        logger.warning(f"[NPU Attention] TND format failed: {e}")
-        
-        # Fallback to BSND format: [batch, seq, heads, dim]
-        try:
-            q_bsnd = q.unsqueeze(0)
-            k_bsnd = k.unsqueeze(0)
-            v_bsnd = v.unsqueeze(0)
-            
-            out_ = torch_npu.npu_fusion_attention(
-                query=q_bsnd,
-                key=k_bsnd,
-                value=v_bsnd,
-                head_num=num_heads,
-                input_layout="BSND",
-                scale=softmax_scale,
-                sparse_mode=sparse_mode,
-                atten_mask=None,
-                pre_tockens=2147483647,
-                next_tockens=0 if is_causal else 2147483647,
-            )[0]
-            out.copy_(out_.squeeze(0))
-            logger.info(f"[NPU Attention] BSND format succeeded, output shape: {out.shape}")
-            return out
-        except RuntimeError as e2:
-            logger.warning(f"[NPU Attention] BSND format also failed: {e2}")
-            raise RuntimeError(f"NPU attention failed: TND failed with {e}, BSND failed with {e2}")
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "npu_fused_infer_attention_score failed with "
+            f"q_shape={tuple(q.shape)}, k_shape={tuple(k.shape)}, "
+            f"v_shape={tuple(v.shape)}, num_heads={num_heads}, "
+            f"num_key_value_heads={num_key_value_heads}, "
+            f"actual_seq_lengths={actual_seq_lengths}, "
+            f"actual_seq_lengths_kv={actual_seq_lengths_kv}, "
+            f"is_causal={is_causal}, sparse_mode={sparse_mode}, "
+            f"attn_mask_shape={None if attn_mask_npu is None else tuple(attn_mask_npu.shape)}"
+        ) from exc
+
+    return out_
 
 
 def attention(
-    q, k, v, num_heads, out, cu_seqlens, max_s, softmax_scale, is_causal=False, attn_mask=None
+    q,
+    k,
+    v,
+    num_heads,
+    out,
+    cu_seqlens,
+    max_s,
+    softmax_scale,
+    is_causal=False,
+    attn_mask=None,
+    num_key_value_heads: Optional[int] = None,
 ):
     if HAS_FLASH_ATTN_V2:
         if use_ipex:
             import intel_extension_for_pytorch as ipex
 
-            return ipex.llm.functional.varlen_attention(
+            attn_out = _ensure_attention_out(q, out)
+            return _normalize_attention_output(ipex.llm.functional.varlen_attention(
                 q.contiguous() if q.device.type == "xpu" else q,
                 k.contiguous() if k.device.type == "xpu" else k,
                 v.contiguous() if v.device.type == "xpu" else v,
-                out,
+                attn_out,
                 cu_seqlens,
                 cu_seqlens,
                 None,
@@ -202,10 +238,10 @@ def attention(
                 0,
                 softmax_scale,
                 zero_tensors=False,
-                is_causal=is_causal,
+                is_causal=False,
                 return_softmax=False,
                 gen_=None,
-                )
+                ))
 
         elif is_hpu:
             return hpu_attn(
@@ -223,11 +259,12 @@ def attention(
             )
 
         else:
-            return flash_attn_2_cuda.varlen_fwd(
+            attn_out = _ensure_attention_out(q, out)
+            return _normalize_attention_output(flash_attn_2_cuda.varlen_fwd(
                 q,
                 k,
                 v,
-                out,
+                attn_out,
                 cu_seqlens,
                 cu_seqlens,
                 max_s,
@@ -240,7 +277,7 @@ def attention(
                 -1,
                 False,
                 None,
-            )
+            ))
 
     if HAS_FLASH_ATTN:
         if is_npu:
@@ -257,14 +294,16 @@ def attention(
                 max_s,
                 softmax_scale,
                 is_causal,
-                )
+                num_key_value_heads=num_key_value_heads,
+            )
             
         else:   
-            return flash_attn_cuda.fwd(
+            attn_out = _ensure_attention_out(q, out)
+            return _normalize_attention_output(flash_attn_cuda.fwd(
                 q,
                 k,
                 v,
-                out,
+                attn_out,
                 cu_seqlens,
                 cu_seqlens,
                 max_s,
@@ -276,6 +315,6 @@ def attention(
                 False,
                 0,
                 None,
-            )
+            ))
 
     raise NotImplementedError("flash attention is not installed")

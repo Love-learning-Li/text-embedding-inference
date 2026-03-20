@@ -213,13 +213,12 @@ class BertAttention:
             q, k, v = qkv.view(-1, self.num_heads * 3, self.head_size).split(
                 self.num_heads, dim=1
             )
-        attn_output = torch.empty_like(q)
-        attention(
+        attn_output = attention(
             q,
             k,
             v,
             self.num_heads,
-            attn_output,
+            None,
             cu_seqlens,
             max_s,
             self.softmax_scale,

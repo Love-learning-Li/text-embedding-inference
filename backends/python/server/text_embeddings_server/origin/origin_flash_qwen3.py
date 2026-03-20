@@ -1,7 +1,5 @@
 import torch
-import torch_npu
 import json
-import os
 from pathlib import Path
 from torch import nn
 import torch.nn.functional as F
@@ -17,155 +15,29 @@ from text_embeddings_server.models.types import FlashBatch, Embedding, PaddedBat
 from text_embeddings_server.utils.flash_attn import attention
 
 tracer = trace.get_tracer(__name__)
-from loguru import logger
 
-ENABLE_ONCE_INFO_LOG = False
-_ONCE_INFO_KEYS = set()
-
-
-def logger_info_once(key: str, message: str):
-    if not ENABLE_ONCE_INFO_LOG:
-        return
-    if key in _ONCE_INFO_KEYS:
-        return
-    _ONCE_INFO_KEYS.add(key)
-    logger.info(message)
 
 def load_weight(model_path, weight_map, name, dtype, device):
     """
     Helper function to load a weight tensor from safetensors.
     """
-    if weight_map is None:
-        with safe_open(f"{model_path}/model.safetensors", framework="pt") as f:
-            return f.get_tensor(name).to(dtype).to(device)
-    else:
-        target_file = weight_map[name]
-        with safe_open(f"{model_path}/{target_file}", framework="pt") as f:
-            return f.get_tensor(name).to(dtype).to(device)
+    target_file = weight_map[name]
+    with safe_open(f"{model_path}/{target_file}", framework="pt") as f:
+        return f.get_tensor(name).to(dtype).to(device)
 
 
-# def apply_rotary_pos_emb_npu1(q, k, cos, sin, unsqueeze_dim=1):
-#     t, n, d = q.shape
-    
-#     def _normalize_coeff_for_basnd(coeff: torch.Tensor) -> Optional[torch.Tensor]:
-#         if coeff.dim() == 3 and coeff.shape[0] == 1 and coeff.shape[1] == t and coeff.shape[2] == d:
-#             coeff_t1d = coeff.squeeze(0).unsqueeze(1)
-#         elif coeff.dim() == 2 and coeff.shape[0] == t and coeff.shape[1] == d:
-#             coeff_t1d = coeff.unsqueeze(1)
-#         elif coeff.dim() == 3 and coeff.shape[0] == t and coeff.shape[1] == 1 and coeff.shape[2] == d:
-#             coeff_t1d = coeff
-#         else:    
-#             return None
-#         return coeff_t1d.permute(1, 0, 2).unsqueeze(0).contiguous()
-    
-#     cos_bnsd = _normalize_coeff_for_basnd(cos)
-#     sin_bnsd = _normalize_coeff_for_basnd(sin)
-#     if cos_bnsd is None or sin_bnsd is None:
-#         return q, k
-    
-#     q_bnsd = q.permute(1, 0, 2).unsqueeze(0).contiguous()
-#     k_bnsd = k.permute(1, 0, 2).unsqueeze(0).contiguous()
-#     q_bnsd = q_bnsd.to(device=q.device, dtype=q.dtype)
-#     k_bnsd = k_bnsd.to(device=q.device, dtype=q.dtype)
-    
-#     cos_bnsd = cos_bnsd.to(device=q.device, dtype=q.dtype)
-#     sin_bnsd = sin_bnsd.to(device=q.device, dtype=q.dtype)
-    
-#     q_embed_bnsd = torch_npu.npu_rotary_mul(q_bnsd, cos_bnsd, sin_bnsd)
-#     k_embed_bnsd = torch_npu.npu_rotary_mul(k_bnsd, cos_bnsd, sin_bnsd)
-    
-#     q_embed = q_embed_bnsd.squeeze(0).permute(1, 0, 2).contiguous()
-#     k_embed = k_embed_bnsd.squeeze(0).permute(1, 0, 2).contiguous()   
-#     return q_embed, k_embed
-        
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
 
-def apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1):
-    
-    enable_fp32_compute = False
-    
-    def _pre_process(
-        x: torch.Tensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Size, torch.dtype]:
-            origin_shape = x.shape
-            if len(origin_shape) == 3:
-                # x: [seq_len, num_heads, head_size]
-                x = x.unsqueeze(0)
 
-            origin_dtype = x.dtype
-            if enable_fp32_compute:
-                x = x.float()
-                cos = cos.float()
-                sin = sin.float()
-
-            return x, cos, sin, origin_shape, origin_dtype
-        
-    def _post_process(
-        output: torch.Tensor,
-        origin_shape: torch.Size,
-        origin_dtype: torch.dtype,
-    ) -> torch.Tensor:
-        if len(origin_shape) == 3:
-            output = output.squeeze(0)
-        if enable_fp32_compute:
-            output = output.to(origin_dtype)
-        return output
-    
-    # q_ [1, seq_len, num_heads, head_size]
-    # k_ [1, seq_len, num_heads // 2, head_size]
-    q_, cos, sin, q_origin_shape, q_origin_dtype = _pre_process(q, cos, sin)
-    k_, cos, sin, k_origin_shape, k_origin_dtype = _pre_process(k, cos, sin)
-    
-    head_dim = q_.shape[-1]
-
-    # cos, sin: [1, seq_len, 1, head_dim]
-    cos = cos.reshape(1, -1, 1, head_dim)
-    sin = sin.reshape(1, -1, 1, head_dim)
-    logger_info_once(
-        "rope_npu_coeff_shape",
-        f"[RoPE] coeff shape: cos={tuple(cos.shape)}, sin={tuple(sin.shape)}",
-    )
-    logger_info_once(
-        "rope_npu_qk_shape",
-        f"[RoPE] q/k shape before npu_rotary_mul: q={tuple(q_.shape)}, k={tuple(k_.shape)}",
-    )
-    output_q = torch_npu.npu_rotary_mul(q_, cos, sin)
-    output_k = torch_npu.npu_rotary_mul(k_, cos, sin)
-
-    output_q = _post_process(output_q, q_origin_shape, q_origin_dtype)
-    output_k = _post_process(output_k, k_origin_shape, k_origin_dtype)
-
-    return output_q, output_k
-    
 def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
-    
-    if q.dim() != 3 or k.dim !=3:
-        return q, k 
-    t, n, d = q.shape
-    if cos.dim() == 3 and cos.shape[0] == 1 and cos.shape[1] == t and cos.shape[2] == d:
-        cos_npu = cos.squeeze(0).unsqueeze(1)
-    elif cos.dim == 2 and cos.shape[0] == t and cos.shape[1] == d:
-        cos_npu = cos.unsqueeze(1)
-    elif cos.dim() == 3 and cos.shape[0] == t and cos.shape[1] in (1, n) and cos.shape[2] == d:
-        cos_npu = cos
-    else:
-        return q, k
-    
-    if sin.dim() == 3 and sin.shape[0] == 1 and sin.shape[1] == t and sin.shape[2] == d:
-        sin_npu = sin.squeeze(0).unsqueeze(1)
-    elif sin.dim == 2 and sin.shape[0] == t and sin.shape[1] == d:
-        sin_npu = sin.unsqueeze(1)
-    elif sin.dim() == 3 and sin.shape[0] == t and sin.shape[1] in (1, n) and sin.shape[2] == d:
-        sin_npu = sin
-    else:
-        return q, k
-
-    cos_npu = cos_npu.to(device =q.device, dtype = q.dtype)
-    sin_npu = sin_npu.to(device =q.device, dtype = q.dtype)
-    q_embed = torch_npu.npu_rotray_mul(q, cos_npu, sin_npu)
-    k_embed = torch_npu.npu_rotray_mul(k, cos_npu, sin_npu)
-    
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
 
@@ -223,7 +95,12 @@ class Qwen3RMSNorm:
             return hidden_states
         else:
             input_dtype = hidden_states.dtype
-            return torch_npu.npu_rms_norm(hidden_states.to(input_dtype), self.weight, epsilon = self.variance_epsilon)[0]
+            hidden_states = hidden_states.to(torch.float32)
+            variance = hidden_states.pow(2).mean(-1, keepdim=True)
+            hidden_states = hidden_states * torch.rsqrt(
+                variance + self.variance_epsilon
+            )
+            return self.weight * hidden_states.to(input_dtype)
 
 
 class Qwen3Attention:
@@ -285,49 +162,27 @@ class Qwen3Attention:
             dtype,
             eps=config.rms_norm_eps,
         )
-        
-        self.layer_idx = layer_idx
 
     def forward(
         self, hidden_states, position_embeddings, cu_seqlens, max_s, attn_mask=None
     ):
         input_shape = hidden_states.shape[:-1]
-		
-        q = self.q_norm.forward(
-            torch_npu.npu_linear(hidden_states, self.q_proj_weight, bias = None).view(*input_shape, self.num_heads, self.head_dim)
-        )
-		
-        k = self.k_norm.forward(
-            torch_npu.npu_linear(hidden_states, self.k_proj_weight, bias = None).view(*input_shape, self.num_key_value_heads, self.head_dim)
-        )
-		
-        v = torch_npu.npu_linear(
-			hidden_states, self.v_proj_weight, bias = None).view(*input_shape, self.num_key_value_heads, self.head_dim
-		)
-		
-        cos, sin = position_embeddings
-        if self.layer_idx == 0:
-            logger_info_once(
-                "attn_layer0_qkvcos_shape",
-                f"[Attention][layer0] q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}, cos={tuple(cos.shape)}, sin={tuple(sin.shape)}",
-            )
-        q, k = apply_rotary_pos_emb_npu(q, k, cos, sin, unsqueeze_dim=1)
+        hidden_shape = (*input_shape, -1, self.head_dim)
 
-        if self.num_key_value_groups > 1:
-            k = k.repeat_interleave(self.num_key_value_groups, dim=1)
-            v= v.repeat_interleave(self.num_key_value_groups, dim=1)
-           
-        if self.layer_idx == 0:
-            logger_info_once(
-                "attn_layer0_qkv_after_gqa",
-                f"[Attention][layer0] q/k/v after gqa: q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}",
-            )
+        q = self.q_norm.forward(
+            F.linear(hidden_states, self.q_proj_weight).view(hidden_shape)
+        )
+        k = self.k_norm.forward(
+            F.linear(hidden_states, self.k_proj_weight).view(hidden_shape)
+        )
+        v = F.linear(hidden_states, self.v_proj_weight).view(hidden_shape)
+        cos, sin = position_embeddings
+        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
         attn_output = torch.empty_like(q)
         attention(
             q,
             k,
             v,
-            self.num_heads,
             attn_output,
             cu_seqlens,
             max_s,
@@ -335,13 +190,8 @@ class Qwen3Attention:
             is_causal=True,
             attn_mask=attn_mask,
         )
-        if self.layer_idx == 0:
-            logger_info_once(
-                "attn_layer0_output_shape",
-                f"[Attention][layer0] attn_output shape={tuple(attn_output.shape)}",
-            )
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output = torch_npu.npu_linear(attn_output, self.o_proj_weight, bias = None)
+        attn_output = F.linear(attn_output, self.o_proj_weight, bias=None)
 
         return attn_output
 
@@ -370,7 +220,6 @@ class Qwen3MLP:
             dtype,
             device,
         )
-        self.gate_up_proj_weight = torch.cat([self.gate_proj_weight, self.up_proj_weight], dim=0)
         self.down_proj_weight = load_weight(
             model_path,
             weight_map,
@@ -378,26 +227,15 @@ class Qwen3MLP:
             dtype,
             device,
         )
-        # self.act_fn = ACT2FN[config.hidden_act]
+        self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_state):
-		# gated_hidden_states = torch_npu.npu_linear(hidden_state, self.gate_proj_weight, bias = None)
-		# uped_hidden_states = torch_npu.npu_linear(hidden_state, self.up_proj_weight, bias = None)
-        		
-        #return torch_npu.npu_linear(
-		#	self.act_fn(gated_hidden_states) * uped_hidden_states,
-		#	self.down_proj_weight, 
-		#	bias = None
-		#)
-        gate_up_states = torch_npu.npu_linear(hidden_state, self.gate_up_proj_weight, bias=None)
-        hidden_states = torch_npu.npu_swiglu(gate_up_states, dim=-1)
-
-        return torch_npu.npu_linear(
-            hidden_states,
-            self.down_proj_weight, 
-            bias = None
+        gated_hidden_states = F.linear(hidden_state, self.gate_proj_weight)
+        uped_hidden_states = F.linear(hidden_state, self.up_proj_weight)
+        return F.linear(
+            self.act_fn(gated_hidden_states) * uped_hidden_states,
+            self.down_proj_weight,
         )
-
 
 
 class Qwen3DecoderLayer:
@@ -460,9 +298,6 @@ class Qwen3RotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, x, position_ids):
-        if position_ids.dim() == 1:
-            position_ids = position_ids.unsqueeze(0)
-        # inv_freq     [1, head_dim // 2]
         inv_freq_expanded = (
             self.inv_freq[None, :, None]
             .float()
@@ -495,10 +330,10 @@ class FlashQwen3Model:
         config: MistralConfig
     """
 
-    def __init__(self, model_path, weight_map, device, dtype, config: Qwen3Config):
+    def __init__(self, model_path, weight_map_json, device, dtype, config: Qwen3Config):
         self.word_embeddings_weight = load_weight(
             model_path,
-            weight_map,
+            weight_map_json["weight_map"],
             "embed_tokens.weight",
             dtype,
             device,
@@ -506,7 +341,7 @@ class FlashQwen3Model:
         self.layers = [
             Qwen3DecoderLayer(
                 model_path,
-                weight_map,
+                weight_map_json["weight_map"],
                 device,
                 dtype,
                 config,
@@ -517,7 +352,7 @@ class FlashQwen3Model:
         self.rotary_emb = Qwen3RotaryEmbedding(config=config, device=device)
         self.norm = Qwen3RMSNorm(
             model_path,
-            weight_map,
+            weight_map_json["weight_map"],
             f"norm.weight",
             device,
             dtype,
@@ -535,7 +370,6 @@ class FlashQwen3Model:
     ):
         inputs_embeds = nn.functional.embedding(input_ids, self.word_embeddings_weight)
         hidden_states = inputs_embeds
-        logger_info_once("model_position_ids_shape", f"[Model] position_ids shape={tuple(position_ids.shape)}")
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         for layer in self.layers:
             hidden_states = layer.forward(
@@ -551,7 +385,7 @@ class FlashQwen3(Model):
         model_path: Path,
         device: torch.device,
         dtype: torch.dtype,
-        pool: str = "last",
+        pool: str = "cls",
         trust_remote: bool = False,
     ):
         config = Qwen3Config.from_pretrained(model_path)
@@ -561,15 +395,10 @@ class FlashQwen3(Model):
         else:
             self.max_input_length = config.max_position_embeddings
 
-        index_file = model_path / "model.safetensors.index.json"
-        if index_file.exists():
-            with open(index_file, "r") as f:
-                index_data = json.load(f)
-            weight_map = index_data["weight_map"]
-        else:
-            weight_map = None
-            
-        model = FlashQwen3Model(model_path, weight_map, device, dtype, config)
+        with open(model_path / "model.safetensors.index.json", "r") as f:
+            index_data = json.load(f)
+
+        model = FlashQwen3Model(model_path, index_data, device, dtype, config)
         self.hidden_size = config.hidden_size
         self.pooling = DefaultPooling(self.hidden_size, pooling_mode=pool)
         self.device = device
@@ -585,7 +414,6 @@ class FlashQwen3(Model):
     @tracer.start_as_current_span("embed")
     def embed(self, batch: Union[FlashBatch, PaddedBatch]) -> List[Embedding]:
         if isinstance(batch, PaddedBatch):
-            logger_info_once("embed_padded_input_ids_shape", f"[Embed] PaddedBatch input_ids shape={tuple(batch.input_ids.shape)}")
             input_lens = batch.attention_mask.cumsum(-1)[:, -1].to(torch.int32)
             max_input_lens = 0
             cu_seqlens = torch.cat(
@@ -606,11 +434,6 @@ class FlashQwen3(Model):
             cu_seqlens = batch.cu_seqlens
             mask = None
             attn_mask = None
-            # mask_flag = torch.ones((2048, 2048), dtype=torch.bool).tril_()
-            # mask_flag = ~mask_flag
-            # mask_value = float("-inf") if self.dtype == torch.float16 else 1
-            # attn_mask = torch.zeros(size=(2048, 2048), dtype=torch.bool).masked_fill_(mask_flag, mask_value).to(self.device)
-            # attn_mask = torch.triu(torch.ones((2048, 2048), dtype=torch.bool, device=self.device), diagonal=1)
             max_input_lens = batch.max_s
 
         output = self.model.forward(
@@ -621,14 +444,7 @@ class FlashQwen3(Model):
             mask=mask,
             attn_mask=attn_mask,
         )
-        
-        last_token_indices = cu_seqlens[1:] - 1
-        hidden_states = output.last_hidden_state.cpu()
-        logger_info_once("embed_hidden_states_shape", f"[Embed] hidden_states shape={tuple(hidden_states.shape)}")
-        embedding = hidden_states[last_token_indices]
-        logger_info_once("embed_cu_seqlens", f"[Embed] cu_seqlens={cu_seqlens.tolist()}")
-        logger_info_once("embed_embedding_shape", f"[Embed] embedding shape={tuple(embedding.shape)}")
-        # embedding = self.pooling.forward(output, None)
+        embedding = self.pooling.forward(output, batch.attention_mask)
         cpu_results = embedding.view(-1).tolist()
 
         return [

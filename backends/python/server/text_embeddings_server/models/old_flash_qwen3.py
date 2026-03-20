@@ -15,6 +15,7 @@ from text_embeddings_server.utils.flash_attn import attention
 
 tracer = trace.get_tracer(__name__)
 
+
 def load_weight(model_path, weight_map, name, dtype, device):
     """
     Helper function to load a weight tensor from safetensors.
@@ -193,12 +194,13 @@ class Qwen3Attention:
 
         cos, sin = position_embeddings
         q, k = apply_rotary_pos_emb_npu(q, k, cos, sin)
-        attn_output = attention(
+        attn_output = torch.empty_like(q)
+        attention(
             q,
             k,
             v,
             self.num_heads,
-            None,
+            attn_output,
             cu_seqlens,
             max_s,
             self.softmax_scale,
@@ -238,7 +240,9 @@ class Qwen3MLP:
             dtype,
             device,
         )
-        self.gate_up_proj_weight = torch.cat([self.gate_proj_weight, self.up_proj_weight], dim=0)
+        self.gate_up_proj_weight = torch.cat(
+            [self.gate_proj_weight, self.up_proj_weight], dim=0
+        )
         self.down_proj_weight = load_weight(
             model_path,
             weight_map,
@@ -249,9 +253,7 @@ class Qwen3MLP:
 
     def forward(self, hidden_state):
         gate_up_states = torch_npu.npu_linear(
-            hidden_state,
-            self.gate_up_proj_weight,
-            bias=None,
+            hidden_state, self.gate_up_proj_weight, bias=None
         )
         hidden_states = torch_npu.npu_swiglu(gate_up_states, dim=-1)
 
@@ -297,37 +299,19 @@ class Qwen3DecoderLayer:
     def forward(
         self, hidden_states, position_embeddings, cu_seqlens, max_s, attn_mask=None
     ):
-        # residual = hidden_states
-        # hidden_states = self.input_layernorm.forward(hidden_states)
-        # # Self Attention
-        # hidden_states = self.attention.forward(
-        #     hidden_states, position_embeddings, cu_seqlens, max_s, attn_mask
-        # )
-        # hidden_states = residual + hidden_states
-
-        # # Fully Connected
-        # residual = hidden_states
-        # hidden_states = self.post_attention_layernorm.forward(hidden_states)
-        # hidden_states = self.mlp.forward(hidden_states)
-        # hidden_states = residual + hidden_states
-
         residual = hidden_states
         hidden_states = self.input_layernorm.forward(hidden_states)
-        attn_output = self.attention.forward(
+        # Self Attention
+        hidden_states = self.attention.forward(
             hidden_states, position_embeddings, cu_seqlens, max_s, attn_mask
         )
+        hidden_states = residual + hidden_states
 
-        hidden_states, _, residual = torch_npu.npu_add_rms_norm(
-            residual,
-            attn_output,
-            self.post_attention_layernorm.weight,
-            self.post_attention_layernorm.variance_epsilon,
-        )
-
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm.forward(hidden_states)
         hidden_states = self.mlp.forward(hidden_states)
         hidden_states = residual + hidden_states
-        
-        
 
         return hidden_states
 
@@ -454,7 +438,6 @@ class FlashQwen3(Model):
         self.pooling = DefaultPooling(self.hidden_size, pooling_mode=pool)
         self.device = device
         self.dtype = dtype
-        self._causal_mask_cache = {}
 
         super(FlashQwen3, self).__init__(model=model, dtype=dtype, device=device)
 
@@ -462,52 +445,6 @@ class FlashQwen3(Model):
     def batch_type(self) -> Union[FlashBatch, PaddedBatch]:
         # for hpu devices, we use PaddedBatch as we do not have real varlen fwd yet
         return FlashBatch if self.device.type != "hpu" else PaddedBatch
-
-    def _get_causal_attn_mask(self, max_s: int) -> Optional[torch.Tensor]:
-        if self.device.type != "npu" or max_s <= 0:
-            return None
-
-        attn_mask = self._causal_mask_cache.get(max_s)
-        if attn_mask is None:
-            attn_mask = torch.triu(
-                torch.ones((max_s, max_s), dtype=torch.bool, device=self.device),
-                diagonal=1,
-            ).contiguous()
-            self._causal_mask_cache[max_s] = attn_mask
-        return attn_mask
-
-    def _last_token_embeddings_on_device(
-        self,
-        hidden_states: torch.Tensor,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        if hidden_states.dim() == 2:
-            if cu_seqlens is None:
-                raise ValueError("cu_seqlens is required for varlen hidden states")
-            last_token_indices = (cu_seqlens[1:] - 1).to(
-                device=hidden_states.device,
-                dtype=torch.long,
-            )
-            return hidden_states.index_select(0, last_token_indices)
-
-        if hidden_states.dim() == 3:
-            if attention_mask is None:
-                raise ValueError("attention_mask is required for padded hidden states")
-            last_token_indices = (
-                attention_mask.sum(dim=1, keepdim=True).sub(1).clamp(min=0).to(
-                    device=hidden_states.device,
-                    dtype=torch.long,
-                )
-            )
-            gather_index = last_token_indices.unsqueeze(-1).expand(
-                -1,
-                -1,
-                hidden_states.shape[-1],
-            )
-            return hidden_states.gather(1, gather_index).squeeze(1)
-
-        raise ValueError(f"Unsupported hidden_states rank: {hidden_states.dim()}")
 
     @tracer.start_as_current_span("embed")
     def embed(self, batch: Union[FlashBatch, PaddedBatch]) -> List[Embedding]:
@@ -517,15 +454,22 @@ class FlashQwen3(Model):
             cu_seqlens = torch.cat(
                 (input_lens.new_tensor([0]), input_lens.cumsum(-1).int())
             )
-            mask = None
-            attn_mask = None
-            last_token_attention_mask = batch.attention_mask
+            mask = batch.attention_mask.bool()
+            bsz, tgt_len = mask.size()
+            min_val = torch.finfo(self.dtype).min
+            attn_mask = torch.full(
+                [bsz, 1, tgt_len, tgt_len],
+                fill_value=min_val,
+                device=self.device,
+                dtype=self.dtype,
+            )
+            expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, tgt_len)
+            attn_mask = attn_mask.masked_fill(expanded_mask, 0.0)
         elif isinstance(batch, FlashBatch):
             cu_seqlens = batch.cu_seqlens
             mask = None
+            attn_mask = None
             max_input_lens = batch.max_s
-            attn_mask = self._get_causal_attn_mask(max_input_lens)
-            last_token_attention_mask = None
 
         output = self.model.forward(
             input_ids=batch.input_ids,
@@ -543,12 +487,10 @@ class FlashQwen3(Model):
                 f"dtype={output.last_hidden_state.dtype}"
             )
 
-        embedding = self._last_token_embeddings_on_device(
-            output.last_hidden_state,
-            cu_seqlens=cu_seqlens if isinstance(batch, FlashBatch) else None,
-            attention_mask=last_token_attention_mask,
-        )
-        cpu_results = embedding.reshape(-1).cpu().tolist()
+        last_token_indices = cu_seqlens[1:] - 1
+        hidden_states = output.last_hidden_state.cpu()
+        embedding = hidden_states[last_token_indices]
+        cpu_results = embedding.view(-1).tolist()
 
         return [
             Embedding(
